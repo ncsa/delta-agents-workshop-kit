@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH --job-name=ws-pinn
+#SBATCH --nodes=1 --ntasks-per-node=1 --cpus-per-task=16
+#SBATCH --gpus-per-node=1 --mem=48g --time=00:08:00
+#SBATCH --output=slurm-%j.out --error=slurm-%j.out
+# account, partition and reservation are added by ws-submit
+set -euo pipefail
+# Run from the topic directory whether ws-submit was called there or in the workspace root.
+if [ -d topics/pinn ]; then cd topics/pinn; fi
+# The module scripts are not written for `set -u`; relax it for these two commands only.
+set +u
+module reset && module load pytorch-conda/2.12
+set -u
+gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || true)
+echo "[ws-env] host=$(hostname) job=$SLURM_JOB_ID gpu=${gpu:-none} module=pytorch-conda/2.12"
+srun python -u src/pinn.py --steps 8000 --n-colloc 2000 --alpha 0.05 --seed 1234

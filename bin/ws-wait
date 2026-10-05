@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# ws-wait: block until a job ends; print each state change, then a summary and the log's tail.
+# Design: staging/agents-workshop/design/kit.md §4. Exit 0 COMPLETED, 5 any other end state,
+# 4 when sacct fails or the timeout passes.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-wait <jobid> [--timeout 1200] [--interval 10]
+
+Polls sacct every --interval seconds (a dot per minute while nothing changes, each state change
+on its own line) until the job ends, then prints one summary line and the last 5 log lines.
+Exit 0 COMPLETED, 5 FAILED/CANCELLED/TIMEOUT/OUT_OF_MEMORY/..., 4 sacct failure, or the
+timeout passed with the job still queued or running (not an error: run ws-wait again).
+EOF
+}
+
+SACCT_RETRIES=3  # consecutive sacct failures before giving up
+
+id=
+timeout=1200
+interval=10
+while [ $# -gt 0 ]; do
+    case $1 in
+        --timeout|--interval)
+            if [ $# -lt 2 ] || ! [[ $2 =~ ^[0-9]+$ ]]; then ws_err "$1 needs a number of seconds"; exit "$WS_E_USAGE"; fi
+            if [ "$1" = --timeout ]; then timeout=$2; else interval=$2; fi
+            shift ;;
+        --timeout=*|--interval=*)
+            v=${1#*=}
+            if ! [[ $v =~ ^[0-9]+$ ]]; then ws_err "${1%%=*} needs a number of seconds"; exit "$WS_E_USAGE"; fi
+            if [[ $1 == --timeout=* ]]; then timeout=$v; else interval=$v; fi ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        -*) ws_err "unknown option: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+        *)
+            if [ -n "$id" ]; then ws_err "one job id only"; exit "$WS_E_USAGE"; fi
+            id=$1 ;;
+    esac
+    shift
+done
+if ! [[ $id =~ ^[0-9]+(_[0-9]+)?$ ]]; then usage >&2; exit "$WS_E_USAGE"; fi
+
+ws_load_env
+ws_require_cmd sacct || exit "$WS_E_ENV"
+ws=$(ws_find_workspace) || ws=$(pwd -P)
+
+dots=0
+end_dots() { if [ "$dots" -eq 1 ]; then printf '\n'; dots=0; fi; }
+
+start=$SECONDS
+last_dot=$SECONDS
+prev=
+fails=0
+while :; do
+    if out=$(sacct -j "$id" --parsable2 -n -X -o State,ExitCode,Elapsed,NodeList 2>&1); then
+        fails=0
+        rec=$(printf '%s\n' "$out" | grep -m 1 -v '^[[:space:]]*$' || true)
+        if [ -n "$rec" ]; then
+            IFS='|' read -r state code elapsed nodes <<< "$rec"
+            state=${state%% *}  # "CANCELLED by 12345" -> CANCELLED
+            if [ "$state" != "$prev" ]; then
+                end_dots
+                where=
+                case $nodes in ''|'None assigned') ;; *) where=" on $nodes" ;; esac
+                ws_info "$(ws_now_hm) job $id $state$where"
+                prev=$state
+                last_dot=$SECONDS
+            fi
+            case $state in
+                COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE|REVOKED|SPECIAL_EXIT)
+                    end_dots
+                    ws_info "job $id $state: exit $code, elapsed $elapsed, node ${nodes:-none}"
+                    if log=$(ws_locate_job_log "$ws" "$id"); then
+                        ws_info "last 5 lines of $log:"
+                        tail -n 5 "$log"
+                    else
+                        ws_info "no log file found yet; try: ws-log $id"
+                    fi
+                    if [ "$state" = COMPLETED ]; then exit "$WS_E_OK"; fi
+                    exit "$WS_E_JOBFAIL" ;;
+            esac
+        fi
+    else
+        fails=$((fails + 1))
+        if [ "$fails" -ge "$SACCT_RETRIES" ]; then
+            end_dots
+            ws_die "$WS_E_SLURM" "sacct failed $fails times in a row: $(printf '%s\n' "$out" | head -n 1)"
+        fi
+    fi
+    if [ $((SECONDS - start)) -ge "$timeout" ]; then
+        end_dots
+        # Not an error (red-team H3): the job is queued or running; the caller decides what next.
+        printf '[ws] job %s still %s after %s s (not an error): run ws-wait %s again, or ask about the queue\n' \
+            "$id" "${prev:-not visible in sacct}" "$timeout" "$id" >&2
+        exit "$WS_E_SLURM"
+    fi
+    if [ $((SECONDS - last_dot)) -ge 60 ]; then printf '.'; dots=1; last_dot=$SECONDS; fi
+    sleep "$interval"
+done

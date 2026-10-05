@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+# ws-status: the module you are on (from the PROGRESS.md checkpoints), node, accounts, jobs and
+# reservation state for the workshop; with WS_CLOCK=on also the time box and the pace.
+# Design: staging/agents-workshop/design/kit.md §4. Always exits 0; missing Slurm reads "unavailable".
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+trap 'ws_warn "ws-status stopped early (internal error near line $LINENO)"; exit 0' ERR
+
+json=0
+for arg in "$@"; do
+    case $arg in
+        --json) json=1 ;;
+        -h|--help) echo "usage: ws-status [--json]"; exit 0 ;;
+        *) ws_warn "ignoring unknown argument: $arg" ;;
+    esac
+done
+
+ws_load_env
+: "${USER:=$(id -un 2>/dev/null || echo unknown)}"
+
+# Clock and node.
+now_hm=$(ws_now_hm)
+now_min=$(ws_hm_to_min "$now_hm")
+fake=${WS_FAKE_NOW:-}
+node=$(hostname 2>/dev/null || echo unknown)
+login=0
+if ws_is_login_node; then login=1; fi
+
+# Workspace and PROGRESS.md header fields.
+ws=$(ws_find_workspace || true)
+if [ -z "$ws" ] && [ -e "$HOME/ws-$WS_DATE/.ws-workspace" ]; then ws=$HOME/ws-$WS_DATE; fi
+prog=${ws:+$ws/PROGRESS.md}
+participant=$(ws_progress_field "$prog" participant)
+harness=$(ws_progress_field "$prog" harness)
+topic=$(ws_progress_field "$prog" topic)
+backend=$(ws_progress_field "$prog" backend)
+: "${participant:=$USER}"
+
+# Module, time box, minutes left.
+module=$(ws_module_for_time "$now_hm")
+if [ "$module" = DONE ]; then
+    module_name="session over"
+    box_start=$WS_SESSION_END
+    box_end=$WS_SESSION_END
+    minutes_left=0
+else
+    module_name=$(ws_module_name "$module")
+    read -r box_start box_end < <(ws_module_box "$module")
+    minutes_left=$(( $(ws_hm_to_min "$box_end") - now_min ))
+fi
+
+# checked <module>: PROGRESS.md has a [x] checkpoint for it.
+checked() { [ -n "$prog" ] && ws_progress_checked "$prog" "$1"; }
+
+# Pace: AHEAD if the current module is checked; BEHIND if the previous one is not and >3 min have passed.
+pace=ON-TIME
+if [ "$module" = DONE ]; then
+    if ! checked M8; then pace=BEHIND; fi
+else
+    idx=${module#M}
+    if checked "$module"; then
+        pace=AHEAD
+    elif [ "$idx" -gt 0 ] && ! checked "M$((idx - 1))" \
+        && [ $((now_min - $(ws_hm_to_min "$box_start"))) -gt 3 ]; then
+        pace=BEHIND
+    fi
+fi
+# C18: from M7 on, a prepared topic without its M6 checkpoint (level 3) comes first: stay on its fast
+# path and start M7 open when ws-check reports level 3.
+prepared_first=0
+case $module in M7|M8) if ! checked M6; then prepared_first=1; pace=BEHIND; fi ;; esac
+
+# Work module (C21): the module after the highest checked one (M0 when none is checked; DONE after
+# M8). It can differ from the clock's module: ahead, or behind on a fast path.
+last_checked=
+for i in 8 7 6 5 4 3 2 1 0; do
+    if checked "M$i"; then last_checked=M$i; break; fi
+done
+if [ -z "$last_checked" ]; then
+    work=M0
+elif [ "$last_checked" = M8 ]; then
+    work=DONE
+else
+    work=M$(( ${last_checked#M} + 1 ))
+fi
+# C22 (KF13): an M7 checkpoint records an iteration, not the end of M7 (C21: "M7 done 11:35; you are on
+# M8", and the agent wrapped before "wrap up"). M7 stays open until WS_M8 or a recorded "wrap up" (a
+# PROGRESS.md note, guide/08-wrap.md), however many M7 checkpoints there are. C23 (LF4): only a note
+# whose text starts with "wrap up" ("- HH:MM wrap up ...", as ws-progress --note writes it); an agent's
+# own note that mentions it ('awaiting "commit it" or "wrap up"', C22 pinn flash T40) keeps M7 open.
+m8_min=$(ws_hm_to_min "$WS_M8")
+wrap_noted=0
+if [ -n "$prog" ] && [ -f "$prog" ] && awk '/^## /{ n = ($0 ~ /^## Notes[ \t]*$/); next }
+        n && tolower($0) ~ /^- [0-9]+:[0-9]+ wrap[ -]?up/ { f = 1; exit } END { exit !f }' "$prog"; then
+    wrap_noted=1
+fi
+m7_open=0
+clock=0
+if [ "$WS_CLOCK" = on ]; then clock=1; fi
+if [ "$clock" -eq 1 ]; then
+    if [ "$work" = M8 ] && [ "$wrap_noted" -eq 0 ] && [ "$module" != DONE ] && [ "$now_min" -lt "$m8_min" ]; then
+        work=M7 m7_open=1
+        if [ "$module" = M7 ] && [ "$pace" = AHEAD ]; then pace=ON-TIME; fi
+    fi
+else
+    # Clock off: the module is the work module, whatever the time. M7 stays open until a typed
+    # "wrap up" is noted (or M8 is checked); there is no time box, no pace and no fast path.
+    if [ "$work" = M8 ] && [ "$wrap_noted" -eq 0 ]; then work=M7 m7_open=1; fi
+    module=$work
+    if [ "$module" = DONE ]; then module_name="session over"; else module_name=$(ws_module_name "$module"); fi
+    box_start='' box_end='' minutes_left=null pace='' prepared_first=0
+fi
+# C22 (Q43): the open-ended jobs this workspace submitted (any state), against WS_OPEN_JOBS_MAX.
+open_n=0
+if [ -n "$ws" ]; then open_n=$(ws_open_jobs "$ws" | grep -c . || true); fi
+
+# Jobs.
+sq_status=ok
+sq_out=
+if command -v squeue >/dev/null 2>&1 && sq_out=$(squeue -u "$USER" -h -o "%i %T %M %P %R" 2>/dev/null); then :; else
+    sq_status=unavailable
+    sq_out=
+fi
+sa_status=ok
+sa_out=
+sa_all=
+if command -v sacct >/dev/null 2>&1 && sa_all=$(sacct -u "$USER" -S today -X -n -P -o JobID,JobName,State,Elapsed 2>/dev/null); then
+    sa_all=$(printf '%s\n' "$sa_all" | sed '/^[[:space:]]*$/d')
+    sa_out=$(printf '%s\n' "$sa_all" | tail -n 3)
+else
+    sa_status=unavailable
+    sa_all=
+fi
+
+# Which rows are whose (red-team M3): the job this shell runs in (the Code Server or srun job) and
+# the jobs ws-submit recorded in this workspace's .ws/jobs.tsv. Anything else is not ours to narrate.
+session_job=${SLURM_JOB_ID:-}
+ours=
+if [ -n "$ws" ] && [ -f "$ws/.ws/jobs.tsv" ]; then
+    ours=$(awk -F'\t' 'NR > 1 && $1 ~ /^[0-9]+$/ && !seen[$1]++ { print $1 }' "$ws/.ws/jobs.tsv" 2>/dev/null || true)
+fi
+# job_tag <jobid>: print " (this session)", " (ours)" or nothing.
+job_tag() {
+    local id=${1%%_*}
+    id=${id%%.*}
+    if [ -n "$session_job" ] && [ "$id" = "$session_job" ]; then printf ' (this session)'; return; fi
+    if [ -n "$ours" ] && grep -qxF -- "$id" <<< "$ours"; then printf ' (ours)'; fi
+}
+
+# The text report lists only the sacct rows that are ours or this session's (the last 3 of them):
+# other runs' and other projects' jobs are not the participant's to narrate. --json keeps the last
+# 3 rows as they are, with "ours" and "this_session" to tell them apart.
+sa_mine=
+while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    tag=$(job_tag "${l%%|*}")
+    if [ -n "$tag" ]; then sa_mine+="$l$tag"$'\n'; fi
+done <<< "$sa_all"
+sa_mine=$(printf '%s' "$sa_mine" | tail -n 3)
+
+# res_info <name>: print "<state>|<nodes>" for a reservation (state may be "not configured", "not found", "unavailable").
+res_info() {
+    local name=$1 out rc st nc
+    if [ -z "$name" ]; then echo "not configured|"; return; fi
+    if ! command -v scontrol >/dev/null 2>&1; then echo "unavailable|"; return; fi
+    if out=$(scontrol show reservation "$name" 2>&1); then rc=0; else rc=$?; fi
+    if [[ $out == *"not found"* ]] || [[ $out == *"Invalid reservation"* ]]; then echo "not found|"; return; fi
+    if [ "$rc" -ne 0 ] || [ -z "$out" ]; then echo "unavailable|"; return; fi
+    st=$(printf '%s\n' "$out" | grep -o 'State=[A-Z_]*' | head -n 1 | cut -d= -f2 || true)
+    nc=$(printf '%s\n' "$out" | grep -o 'NodeCnt=[0-9]*' | head -n 1 | cut -d= -f2 || true)
+    echo "${st:-unknown}|${nc}"
+}
+IFS='|' read -r gpu_state gpu_nodes < <(res_info "$WS_RES_GPU")
+IFS='|' read -r cpu_state cpu_nodes < <(res_info "$WS_RES_CPU")
+# C22: a MAGNETIC reservation (WS_RES_MAGNETIC) takes the workshop accounts' jobs without
+# --reservation. Its state: "active", "starts Mon 09:00", or "not found" when scontrol cannot show it.
+mag_state="not configured"
+if [ -n "$WS_RES_MAGNETIC" ]; then
+    mag_state="not found"
+    if IFS='|' read -r m_st m_start _ < <(ws_res_window "$WS_RES_MAGNETIC"); then
+        if [ "$m_st" = ACTIVE ]; then mag_state=active
+        elif [ -n "$m_start" ]; then mag_state="starts $m_start"
+        else mag_state=${m_st,,}; fi
+    fi
+fi
+
+# Next action from guide/next-actions.tsv (workspace copy first, then the kit's), for the work module,
+# not the clock's (C21: an AHEAD participant was told the step they had done); DONE once the session
+# has ended.
+next_for=$work
+if [ "$module" = DONE ]; then next_for=DONE; fi
+next=
+for tsv in ${ws:+"$ws/guide/next-actions.tsv"} "$WS_KIT_RO/workspace-template/guide/next-actions.tsv"; do
+    if [ -f "$tsv" ]; then
+        next=$(awk -F'\t' -v m="$next_for" '$1 == m {print $2; exit}' "$tsv")
+        [ -n "$next" ] && break
+    fi
+done
+: "${next:=run ws-status again after the next step}"
+# M7 runs until WS_M8: a checked M7 is an iteration, not the cue to wrap (all six C20 rehearsals
+# closed M7 early). A typed "wrap up" (its PROGRESS.md note, C22) or M8's checkpoint ends this.
+if [ "$m7_open" -eq 1 ] && [ "$clock" -eq 0 ]; then
+    next="M7 open runs until a typed \"wrap up\": iterate on the open goal (guide/07-open.md)"
+elif [ "$m7_open" -eq 1 ]; then
+    next="M7 open runs until $WS_M8 ($((m8_min - now_min)) min left) or a typed \"wrap up\": iterate on the open goal (guide/07-open.md); M8 wrap at $WS_M8"
+fi
+
+if [ "$json" -eq 1 ]; then
+    # jarr <status> <lines>: a JSON array of lines, or the string "unavailable".
+    jarr() {
+        local first=1 line
+        if [ "$1" != ok ]; then ws_json_str "$1"; return; fi
+        printf '['
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if [ $first -eq 0 ]; then printf ','; fi
+            first=0
+            printf '%s' "$(ws_json_str "$line")"
+        done <<< "$2"
+        printf ']\n'
+    }
+    jnum() { if [ -n "$1" ]; then printf '%s' "$1"; else printf 'null'; fi; }
+    jbool() { if [ "$1" -eq 1 ]; then printf 'true'; else printf 'false'; fi; }
+    printf '{'
+    printf '"time":%s,' "$(ws_json_str "$now_hm")"
+    printf '"fake_clock":%s,' "$(ws_json_str "$fake")"
+    printf '"node":%s,"compute_node":%s,"login_node":%s,' "$(ws_json_str "$node")" "$(jbool $((1 - login)))" "$(jbool "$login")"
+    printf '"participant":%s,"workspace":%s,' "$(ws_json_str "$participant")" "$(ws_json_str "$ws")"
+    printf '"harness":%s,"topic":%s,"backend":%s,' "$(ws_json_str "$harness")" "$(ws_json_str "$topic")" "$(ws_json_str "$backend")"
+    printf '"backend_default":%s,' "$(ws_json_str "$WS_BACKEND_DEFAULT")"
+    printf '"accounts":{"cpu":%s,"gpu":%s},' "$(ws_json_str "$WS_ACCOUNT_CPU")" "$(ws_json_str "$WS_ACCOUNT_GPU")"
+    printf '"partitions":{"cpu":%s,"gpu":%s},' "$(ws_json_str "$WS_PART_CPU")" "$(ws_json_str "$WS_PART_GPU")"
+    printf '"clock":%s,' "$(jbool "$clock")"
+    printf '"module":%s,"module_name":%s,' "$(ws_json_str "$module")" "$(ws_json_str "$module_name")"
+    printf '"box_start":%s,"box_end":%s,"minutes_left":%s,' "$(ws_json_str "$box_start")" "$(ws_json_str "$box_end")" "$minutes_left"
+    printf '"pace":%s,"prepared_first":%s,' "$(ws_json_str "$pace")" "$(jbool "$prepared_first")"
+    omax=null
+    if [[ $WS_OPEN_JOBS_MAX =~ ^[0-9]+$ ]]; then omax=$WS_OPEN_JOBS_MAX; fi
+    printf '"work_module":%s,"open_jobs":{"count":%s,"max":%s},' "$(ws_json_str "$work")" "$open_n" "$omax"
+    printf '"jobs":{"squeue":%s,"sacct_recent":%s,' "$(jarr "$sq_status" "$sq_out")" "$(jarr "$sa_status" "$sa_out")"
+    if [ -n "$session_job" ]; then printf '"this_session":%s,' "$(ws_json_str "$session_job")"; else printf '"this_session":null,'; fi
+    printf '"ours":%s},' "$(jarr ok "$ours")"
+    printf '"reservations":{"gpu":{"name":%s,"state":%s,"nodes":%s},' \
+        "$(ws_json_str "$WS_RES_GPU")" "$(ws_json_str "$gpu_state")" "$(jnum "$gpu_nodes")"
+    printf '"cpu":{"name":%s,"state":%s,"nodes":%s},' \
+        "$(ws_json_str "$WS_RES_CPU")" "$(ws_json_str "$cpu_state")" "$(jnum "$cpu_nodes")"
+    printf '"magnetic":{"name":%s,"state":%s}},' "$(ws_json_str "$WS_RES_MAGNETIC")" "$(ws_json_str "$mag_state")"
+    printf '"next":%s' "$(ws_json_str "$next")"
+    printf '}\n'
+    exit 0
+fi
+
+# res_line <kind> <name> <state> <nodes>
+res_line() {
+    local what=$3
+    if [ -n "$4" ]; then what="$3, $4 nodes"; fi
+    ws_info "reservation ($1): ${2:-(none)}: $what"
+}
+
+ws_info "time: $now_hm${fake:+ (rehearsal clock WS_FAKE_NOW=$fake)}"
+if [ "$login" -eq 1 ]; then
+    ws_info "node: $node (login node)"
+    while IFS= read -r line; do ws_info "note: $line"; done < <(ws_login_note)
+else
+    ws_info "node: $node (compute node)"
+fi
+# One line for participant and workspace keeps the report no longer than C20's with the accounts line.
+ws_info "participant: $participant; workspace: ${ws:-(none found; run ws-init)}"
+ws_info "harness: ${harness:-(unknown)}"
+# The settings M1 names, from workshop.env (loaded above): the harness's shell may not have them.
+ws_info "accounts: cpu=$WS_ACCOUNT_CPU gpu=$WS_ACCOUNT_GPU; partitions: cpu=$WS_PART_CPU gpu=$WS_PART_GPU"
+ws_info "topic: ${topic:-(not chosen yet)}"
+ws_info "backend: ${backend:-(unknown)} (default $WS_BACKEND_DEFAULT)"
+if [ "$clock" -eq 0 ]; then
+    if [ "$module" = DONE ]; then ws_info "module: DONE (every module is checked)"
+    else ws_info "module: $module $module_name"; fi
+elif [ "$module" = DONE ]; then
+    ws_info "module: DONE (the session ended at $WS_SESSION_END)"
+else
+    ws_info "module: $module $module_name ($box_start-$box_end), $minutes_left min left"
+fi
+if [ "$clock" -eq 1 ]; then ws_info "pace: $pace"; fi
+if [ "$pace" = AHEAD ]; then
+    done_hm=$(ws_progress_checked_hm "$prog" "$last_checked" || true)
+    if [ "$work" = DONE ]; then
+        ws_info "progress: $last_checked done${done_hm:+ $done_hm}; every module is checked (the clock box is $module)"
+    elif [ "$m7_open" -eq 1 ]; then
+        ws_info "progress: M7 under way (last checkpoint${done_hm:+ $done_hm}); it runs until $WS_M8 or a typed \"wrap up\" (the clock box is $module)"
+    else
+        ws_info "progress: $last_checked done${done_hm:+ $done_hm}; you are on $work (the clock box is $module)"
+    fi
+fi
+if [ "$prepared_first" -eq 1 ]; then
+    ws_info "fast path: the prepared topic first (M6 has no checkpoint): its fast path to ws-check level 3, then M7 open"
+fi
+case $module in
+    M[1-8]) if ! checked M0; then ws_info "note: M0 has no checkpoint: record ws-progress M0 first"; fi ;;
+esac
+# C22 (Q43): the M7 job budget, from M7 on (or once an open-ended job exists).
+if [ "$module" = M7 ] || [ "$work" = M7 ] || [ "$open_n" -gt 0 ]; then
+    ws_info "open-ended jobs: $open_n of $WS_OPEN_JOBS_MAX (one job per iteration; ws-submit refuses more)"
+fi
+if [ "$sq_status" != ok ]; then
+    ws_info "jobs (squeue): unavailable"
+elif [ -z "$sq_out" ]; then
+    ws_info "jobs (squeue): none queued or running"
+else
+    ws_info "jobs (squeue): JOBID STATE TIME PARTITION REASON"
+    while IFS= read -r l; do [ -n "$l" ] && printf '[ws]   %s%s\n' "$l" "$(job_tag "${l%% *}")"; done <<< "$sq_out"
+fi
+if [ "$sa_status" != ok ]; then
+    ws_info "recent jobs (sacct): unavailable"
+elif [ -z "$sa_all" ]; then
+    ws_info "recent jobs (sacct): none today"
+elif [ -z "$sa_mine" ]; then
+    ws_info "recent jobs (sacct): none from this workspace or session today"
+else
+    ws_info "recent jobs (sacct): JobID|JobName|State|Elapsed"
+    while IFS= read -r l; do [ -n "$l" ] && printf '[ws]   %s\n' "$l"; done <<< "$sa_mine"
+fi
+# With a magnetic reservation, an empty WS_RES_* is expected: no "not configured" line for it.
+if [ -z "$WS_RES_MAGNETIC" ] || [ -n "$WS_RES_GPU" ]; then res_line gpu "$WS_RES_GPU" "$gpu_state" "$gpu_nodes"; fi
+if [ -z "$WS_RES_MAGNETIC" ] || [ -n "$WS_RES_CPU" ]; then res_line cpu "$WS_RES_CPU" "$cpu_state" "$cpu_nodes"; fi
+if [ "$mag_state" = "not found" ]; then
+    ws_info "reservation (magnetic): $WS_RES_MAGNETIC: not found"
+elif [ -n "$WS_RES_MAGNETIC" ]; then
+    ws_info "reservation (magnetic): $WS_RES_MAGNETIC: $mag_state; jobs on the workshop accounts use it without --reservation"
+fi
+ws_info "next: $next"
+exit 0

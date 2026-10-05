@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# ws-log: find a job's log; print its evidence lines first, then its path, size and last 8 lines.
+# Design: staging/agents-workshop/design/kit.md §4; the evidence follows topics/LOG-PROTOCOL.md.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-log <jobid>
+
+Finds the log (scontrol show job StdOut=, then the .ws/jobs.tsv row's script directory, then
+slurm-<id>.out, then logs/<id>.out), and prints the evidence block first: every [ws-env] and
+KEY: value line, RESULTS_OK, and the first 3 error-looking lines; then its path, size and last
+8 lines.
+EOF
+}
+
+TAIL_LINES=8
+
+case ${1:-} in -h|--help) usage; exit "$WS_E_OK" ;; esac
+if [ $# -ne 1 ] || ! [[ $1 =~ ^[0-9]+(_[0-9]+)?$ ]]; then usage >&2; exit "$WS_E_USAGE"; fi
+id=$1
+
+ws_load_env
+ws=$(ws_find_workspace) || ws=$(pwd -P)
+if ! log=$(ws_locate_job_log "$ws" "$id"); then
+    ws_die "$WS_E_SLURM" "no log found for job $id (looked at scontrol StdOut=, .ws/jobs.tsv, slurm-$id.out, logs/$id.out); a pending job has no log yet"
+fi
+
+# Evidence first: these are the lines the agent quotes, and a short tail keeps the context small.
+ws_info "evidence:"
+# [ws-env] lines, KEY: value lines (upper-case keys; log levels such as INFO: are not evidence),
+# and RESULTS_OK.
+ev=$(grep -E '^\[ws-env\]|^[A-Z][A-Z0-9_@.%-]*: |^RESULTS_OK[[:space:]]*$' "$log" \
+    | grep -vE '^(INFO|WARN|WARNING|ERROR|DEBUG|NOTE|CRITICAL|FATAL|TRACE): ' || true)
+if [ -n "$ev" ]; then printf '%s\n' "$ev"; else printf '(no [ws-env] or KEY: value lines)\n'; fi
+if grep -qE '^RESULTS_OK[[:space:]]*$' "$log"; then
+    ws_info "RESULTS_OK: present"
+else
+    ws_info "RESULTS_OK: missing"
+fi
+ws_info "error lines (first 3):"
+errs=$(grep -m 3 -E 'Traceback|[A-Za-z]+Error:|[Ee]rror:|CUDA error|out of memory|OOM|Killed|srun: error|fatal|Segmentation fault' "$log" || true)
+if [ -n "$errs" ]; then printf '%s\n' "$errs"; else printf '(none)\n'; fi
+ws_info "log: $log ($(wc -c < "$log" | tr -d ' ') bytes)"
+ws_info "last $TAIL_LINES lines:"
+tail -n "$TAIL_LINES" "$log"

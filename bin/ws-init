@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+# ws-init: create (or refresh) your workshop workspace from the read-only kit.
+# Design: staging/agents-workshop/design/kit.md §4. Idempotent: a second run changes nothing.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-init [--refresh-kit] [--allow-login] [--lumen-key auto|site|personal|workshop]
+
+Creates $HOME/ws-$WS_DATE (or $WS_HOME) from $WS_KIT_RO/workspace-template, copying
+missing files only, then writes PROGRESS.md, PLAN.md, .ws/ and a git repository.
+
+  --refresh-kit   also update guide/*, ON-YOUR-OWN.md, PERMISSIONS.md, FAQ.md, PROMPTS.md, topics/README.md,
+                  topics/LOG-PROTOCOL.md and topics/*/{check.sh,analyze.py,README.md} (and
+                  opencode.json) from the kit where you have not edited them
+  --allow-login   accepted for compatibility (login nodes are allowed; ws-init recommends a compute-node shell)
+  --lumen-key M   which Lumen key opencode.json uses, kept for later runs (auto forgets it):
+                  site      the NCSA key the hpc-gpt module ships
+                  personal  your own key in ~/.config/lumen/key (mode 600)
+                  workshop  the workshop project key ($WS_LUMEN_KEY_FILE)
+                  auto      personal if that file exists, else workshop if installed, else site
+                  (default: WS_LUMEN_KEY from workshop.env, else auto). A rerun re-renders the
+                  key, so a key added later takes effect; it keeps your backend.
+EOF
+}
+
+refresh=0
+allow_login=0
+key_opt=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --refresh-kit) refresh=1 ;;
+        --allow-login) allow_login=1 ;;
+        --lumen-key)
+            [ $# -ge 2 ] || { ws_err "--lumen-key needs a mode (auto, site, personal or workshop)"; exit "$WS_E_USAGE"; }
+            key_opt=$2; shift ;;
+        --lumen-key=*) key_opt=${1#--lumen-key=} ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        *) ws_err "unknown argument: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+    esac
+    shift
+done
+case $key_opt in
+    ''|auto|site|personal|workshop) ;;
+    *) ws_err "--lumen-key $key_opt: use auto, site, personal or workshop"; exit "$WS_E_USAGE" ;;
+esac
+
+ws_load_env
+ws_backend_check || exit "$WS_E_ENV"
+ws_lumen_models_check || exit "$WS_E_ENV"
+
+tpl=$WS_KIT_RO/workspace-template
+if [ ! -d "$tpl" ] || [ ! -r "$tpl" ]; then
+    ws_die "$WS_E_ENV" "kit template not readable: $tpl (source the kit's env.sh first)"
+fi
+ws_require_cmd sha256sum || exit "$WS_E_ENV"
+
+# A login node is allowed (the agent submits its work as jobs); the next steps below recommend a
+# compute-node shell first. --allow-login is accepted and changes nothing.
+: "$allow_login"
+
+: "${USER:=$(id -un)}"
+ws=${WS_HOME:-$HOME/ws-$WS_DATE}
+manifest=$ws/.ws/kit-manifest.sha256
+
+# The Lumen key mode: --lumen-key (auto: the auto rule, and the saved choice is forgotten), else
+# ws_lumen_key_resolve (the saved choice in .ws/lumen-key, else WS_LUMEN_KEY, else auto). Resolved
+# before anything is written: a refused key changes nothing.
+key_pref=$(ws_lumen_key_saved "$ws")
+if [ -n "$key_opt" ]; then
+    key_mode=$(ws_lumen_key_mode "$key_opt") || exit "$WS_E_ENV"
+else
+    key_res=$(ws_lumen_key_resolve "$ws") || exit "$WS_E_ENV"
+    key_mode=${key_res%% *}
+fi
+kit_version=$(head -n 1 "$WS_KIT_RO/VERSION" 2>/dev/null || echo unknown)
+changed=0
+copied=()
+refreshed=()
+kept=()
+
+if [ ! -d "$ws" ]; then
+    mkdir -p "$ws"
+    changed=1
+fi
+mkdir -p "$ws/.ws"
+if [ "$key_opt" = auto ] && [ -f "$key_pref" ]; then
+    rm -f -- "$key_pref"
+    changed=1
+elif [ -n "$key_opt" ] && [ "$key_opt" != auto ] && [ "$(head -n 1 "$key_pref" 2>/dev/null)" != "$key_opt" ]; then
+    printf '%s\n' "$key_opt" > "$key_pref"
+    changed=1
+fi
+
+# Recorded sha256 of every kit file ever copied into this workspace (relative path -> sha).
+declare -A rec=()
+if [ -f "$manifest" ]; then
+    while read -r sum path; do
+        if [ -n "$path" ]; then rec[$path]=$sum; fi
+    done < "$manifest"
+fi
+
+# install_file <src> <dst>: copy a kit file and make it writable for the participant.
+install_file() {
+    mkdir -p "$(dirname "$2")"
+    cp "$1" "$2"
+    chmod u+w "$2"
+}
+
+# refreshable <relpath>: the files --refresh-kit may replace.
+refreshable() {
+    case $1 in
+        guide/*|ON-YOUR-OWN.md|PERMISSIONS.md|FAQ.md|PROMPTS.md|topics/README.md|topics/LOG-PROTOCOL.md) return 0 ;;
+        topics/*/check.sh|topics/*/analyze.py|topics/*/README.md) return 0 ;;
+    esac
+    return 1
+}
+
+# rendered <relpath>: templates ws-init renders into another file; they are not copied.
+rendered() {
+    case $1 in PLAN.md.in|PROGRESS.md.in|opencode.json.in) return 0 ;; esac
+    return 1
+}
+
+# staff_only <relpath>: kit files for staff (oracle runs, data staging, bytecode) that never
+# enter a participant workspace; ws-check and the lead use them from the kit copy.
+staff_only() {
+    case $1 in
+        topics/*/oracle.sh|topics/*/src/stage_*.py|*/__pycache__/*|*.pyc) return 0 ;;
+    esac
+    return 1
+}
+
+# 1. Copy missing files; with --refresh-kit, replace unedited refreshable files.
+while IFS= read -r -d '' src; do
+    rel=${src#"$tpl"/}
+    if [ "${rel##*/}" = .gitkeep ] || rendered "$rel" || staff_only "$rel"; then continue; fi
+    dst=$ws/$rel
+    if [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
+        install_file "$src" "$dst"
+        rec[$rel]=$(ws_sha256 "$dst")
+        copied+=("$rel")
+        changed=1
+        continue
+    fi
+    if [ "$refresh" -eq 1 ] && refreshable "$rel" && [ -f "$dst" ]; then
+        new=$(ws_sha256 "$src")
+        cur=$(ws_sha256 "$dst")
+        if [ "$cur" = "$new" ]; then
+            rec[$rel]=$new
+        elif [ "$cur" = "${rec[$rel]:-}" ]; then
+            install_file "$src" "$dst"
+            rec[$rel]=$new
+            refreshed+=("$rel")
+            changed=1
+        else
+            kept+=("$rel")
+        fi
+    fi
+done < <(find "$tpl" -type f -print0 | sort -z)
+
+# render <file>: print <file> with the @PLACEHOLDER@ values substituted.
+render() {
+    local c
+    c=$(<"$1")
+    c=${c//@KIT@/"$WS_KIT_RO"}
+    c=${c//, \"apiKey\": \"@LUMEN_API_KEY@\"/"$lumen_apikey"}
+    c=${c//\"@LUMEN_WHITELIST@\"/"$lumen_whitelist"}
+    c=${c//        \"@LUMEN_MODELS@\": \{\}/"$lumen_models"}
+    c=${c//@LUMEN_KEY@/"$key_mode"}
+    # An empty path would render the deny rule "**" (every command); the fallback is a real spelling.
+    c=${c//@LUMEN_KEY_FILE@/"${WS_LUMEN_KEY_FILE:-/keys/lumen-ws.key}"}
+    c=${c//@STANDBY_DIR@/"$WS_STANDBY_DIR"}
+    c=${c//@MODEL_DEFAULT@/"$WS_MODEL_DEFAULT"}
+    c=${c//@SMALL_MODEL@/"$WS_SMALL_MODEL"}
+    c=${c//@USER@/"$USER"}
+    c=${c//@DATE@/"$WS_DATE"}
+    c=${c//@NODE@/"$node"}
+    c=${c//@HARNESS@/"$harness"}
+    c=${c//@BACKEND@/"$backend"}
+    printf '%s\n' "$c"
+}
+
+node=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)
+harness=${WS_HARNESS:-opencode (hpc-gpt)}
+# The Lumen provider: the apiKey member (none for the site key), the whitelist, one entry per model.
+lumen_apikey=$(ws_lumen_apikey_member "$key_mode")
+lumen_whitelist=$(ws_lumen_whitelist_json)
+lumen_models=$(ws_lumen_models_json '        ')
+
+# The participant's backend: the one PROGRESS.md already records wins, so a re-run (plain or
+# --refresh-kit) never undoes `ws-standby on|off`; otherwise WS_BACKEND_DEFAULT decides
+# (split: ws_backend_split, a cksum of the NetID).
+backend=$(ws_progress_field "$ws/PROGRESS.md" backend)
+record_backend=0
+case $backend in
+    lumen|standby) ;;
+    *)
+        if [ -n "$backend" ]; then ws_warn "PROGRESS.md has backend: $backend (not lumen or standby); using the workshop default"; fi
+        if [ -f "$ws/PROGRESS.md" ]; then record_backend=1; fi
+        backend=$(ws_backend_assign "$USER") || exit "$WS_E_ENV"
+        ;;
+esac
+read -r bk_model bk_small < <(ws_backend_models "$backend")
+
+# oc_unedited: opencode.json differs from the recorded render only in its model lines (ws-standby
+# rewrites those), so --refresh-kit may replace it.
+oc_unedited() {
+    local b m s
+    [ -n "${rec[opencode.json]:-}" ] || return 1
+    for b in lumen standby; do
+        read -r m s < <(ws_backend_models "$b")
+        if [ "$(ws_oc_set_models "$m" "$s" < "$ws/opencode.json" | sha256sum | cut -d' ' -f1)" = "${rec[opencode.json]}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 2. opencode.json from the kit's opencode.json.in (when the kit has one), every model line set to
+# the participant's backend.
+# The key mode PROGRESS.md records: a different one now (a key added or removed, --lumen-key)
+# re-renders an unedited opencode.json on a plain rerun too, so the new key takes effect.
+prev_key=$(ws_progress_field "$ws/PROGRESS.md" "lumen key")
+key_changed=0
+if [ -f "$ws/PROGRESS.md" ] && [ "$prev_key" != "$key_mode" ]; then key_changed=1; fi
+if [ -f "$tpl/opencode.json.in" ]; then
+    if [ -z "$WS_STANDBY_DIR" ]; then
+        ws_warn "WS_STANDBY_DIR is not set; opencode.json has empty paths for the standby"
+    fi
+    # Rendered in memory: a temp file in the workspace would change a directory's mtime on
+    # every run, and a second ws-init must change nothing.
+    oc=$(render "$tpl/opencode.json.in" | ws_oc_set_models "$bk_model" "$bk_small")
+    new=$(printf '%s\n' "$oc" | sha256sum | cut -d' ' -f1)
+    if [ ! -e "$ws/opencode.json" ]; then
+        printf '%s\n' "$oc" > "$ws/opencode.json"
+        rec[opencode.json]=$new
+        copied+=(opencode.json)
+        changed=1
+    else
+        cur=$(ws_sha256 "$ws/opencode.json")
+        if [ "$cur" = "$new" ]; then
+            rec[opencode.json]=$new
+        elif { [ "$refresh" -eq 1 ] || [ "$key_changed" -eq 1 ]; } && { [ "$cur" = "${rec[opencode.json]:-}" ] || oc_unedited; }; then
+            printf '%s\n' "$oc" > "$ws/opencode.json"
+            rec[opencode.json]=$new
+            refreshed+=(opencode.json)
+            changed=1
+        elif [ "$refresh" -eq 1 ] || [ "$key_changed" -eq 1 ]; then
+            kept+=(opencode.json)
+            if [ "$key_changed" -eq 1 ]; then
+                ws_warn "the Lumen key is now $key_mode, but opencode.json has your own edits and was kept; ask a helper"
+                key_changed=0     # PROGRESS.md keeps the mode opencode.json really has
+            fi
+        fi
+    fi
+else
+    ws_info "notice: the kit has no opencode.json.in yet; skipping opencode.json"
+fi
+
+# 3. topics/<t>/data -> $WS_KIT_RO/data/<t> where the kit has data for that topic.
+for tdir in "$ws"/topics/*/; do
+    [ -d "$tdir" ] || continue
+    t=$(basename "$tdir")
+    target=$WS_KIT_RO/data/$t
+    link=${tdir%/}/data
+    if [ -d "$target" ] && [ ! -e "$link" ] && [ ! -L "$link" ]; then
+        ln -s "$target" "$link"
+        changed=1
+    fi
+done
+
+# 4. PROGRESS.md and PLAN.md from their templates (never overwritten).
+for name in PROGRESS.md PLAN.md; do
+    if [ ! -e "$ws/$name" ] && [ -f "$tpl/$name.in" ]; then
+        render "$tpl/$name.in" > "$ws/$name"
+        if [ "$name" = PROGRESS.md ]; then ws_info "backend: $backend (workshop default $WS_BACKEND_DEFAULT)"; fi
+        changed=1
+    fi
+done
+if [ "$record_backend" -eq 1 ]; then
+    if WS_HOME=$ws "$WS_BIN_DIR/ws-progress" --set backend "$backend" >/dev/null; then
+        ws_info "backend: $backend (workshop default $WS_BACKEND_DEFAULT)"
+    else
+        ws_warn "could not record the backend in PROGRESS.md"
+    fi
+    changed=1
+fi
+if [ "$key_changed" -eq 1 ]; then
+    if WS_HOME=$ws "$WS_BIN_DIR/ws-progress" --set "lumen key" "$key_mode" >/dev/null; then
+        ws_info "lumen key: $key_mode${prev_key:+ (was $prev_key)}"
+    else
+        ws_warn "could not record the Lumen key mode in PROGRESS.md"
+    fi
+    changed=1
+fi
+
+# 5. Workspace marker, job ledger, .gitignore.
+if [ ! -e "$ws/.ws-workspace" ]; then
+    printf '# ws-agents-kit workspace marker: ws-* helpers find the workspace by this file.\n' > "$ws/.ws-workspace"
+    changed=1
+fi
+if [ ! -e "$ws/.ws/jobs.tsv" ]; then
+    printf 'jobid\ttime\tscript\ttopic\teffective\tkind\n' > "$ws/.ws/jobs.tsv"
+    changed=1
+fi
+# The session's stray files (M1's scratch.txt and hello-from-<you>.txt, M5's ref-<topic>.png, timing
+# notes in times.txt) stay out of `git add -A` (the C20 rehearsals committed them).
+if [ ! -e "$ws/.gitignore" ]; then
+    printf '%s\n' '# written by ws-init' '.ws/' 'topics/*/data' 'slurm-*.out' 'logs/' 'results/' \
+        '__pycache__/' '.cache/' '.vllm/' 'build/' 'open/.venv/' 'open/data/' \
+        'scratch.txt' 'hello-from-*.txt' 'ref-*.png' 'times.txt' > "$ws/.gitignore"
+    changed=1
+fi
+
+# 6. Manifest and kit version (rewritten only when their content changes).
+new_manifest=$(for p in "${!rec[@]}"; do printf '%s  %s\n' "${rec[$p]}" "$p"; done | LC_ALL=C sort -k2)
+if [ ! -f "$manifest" ] || [ "$(cat "$manifest")" != "$new_manifest" ]; then
+    printf '%s\n' "$new_manifest" > "$manifest"
+    changed=1
+fi
+old_version=$(head -n 1 "$ws/.ws/kit-version" 2>/dev/null || true)
+if [ "$old_version" != "$kit_version" ]; then
+    if [ -n "$old_version" ] && [ "$refresh" -eq 0 ]; then
+        ws_info "notice: the kit changed from $old_version to $kit_version; run 'ws-init --refresh-kit' to update guide and topic files"
+    fi
+    printf '%s\n' "$kit_version" > "$ws/.ws/kit-version"
+    changed=1
+fi
+
+# 7. git repository with a repo-local identity, so git diff works from M4 on.
+if command -v git >/dev/null 2>&1; then
+    if [ ! -d "$ws/.git" ]; then
+        if git -C "$ws" -c init.defaultBranch=main init -q \
+            && git -C "$ws" config user.name "$USER" \
+            && git -C "$ws" config user.email "$USER@delta.ncsa.illinois.edu" \
+            && git -C "$ws" add -A \
+            && git -C "$ws" commit -q -m "ws-init: workspace from ws-agents-kit $kit_version"; then
+            ws_info "git repository initialised with a first commit"
+        else
+            ws_warn "git init or the first commit failed in $ws; git diff may not work"
+        fi
+        changed=1
+    fi
+else
+    ws_warn "git not found; skipping the git repository (git diff will not work)"
+fi
+
+# 8. A per-user share directory (unused in the session since C23; created once, owner only).
+if [ -n "$WS_SHARE" ]; then
+    share=$WS_SHARE/$USER
+    if [ ! -d "$share" ]; then
+        if mkdir -p "$share" 2>/dev/null; then
+            if command -v setfacl >/dev/null 2>&1; then
+                setfacl -b -k "$share" 2>/dev/null \
+                    || ws_warn "setfacl could not strip inherited ACLs on $share; check it with getfacl"
+            else
+                ws_warn "setfacl not found; inherited ACLs on $share were not stripped"
+            fi
+            chmod 700 "$share"
+            ws_info "created $share (owner only)"
+            changed=1
+        else
+            ws_warn "could not create $share, a per-user share directory (unused in the session); nothing else depends on it"
+        fi
+    fi
+    # The share directory is sticky and group-writable: someone else may have created $USER's
+    # directory first (red-team M10); setfacl on it would then fail with "Operation not permitted".
+    if [ -d "$share" ] && owner=$(stat -c %U -- "$share" 2>/dev/null) && [ "$owner" != "$(id -un)" ]; then
+        ws_err "$share is owned by $owner; ask a helper (a per-user share directory, unused in the session, must be yours)"
+        share_rc=$WS_E_ENV
+    fi
+else
+    ws_info "notice: WS_SHARE is not set; skipping the share directory"
+fi
+
+# Report.
+if [ "${#copied[@]}" -gt 0 ]; then ws_info "copied ${#copied[@]} kit files into $ws"; fi
+if [ "$refresh" -eq 1 ]; then
+    if [ "${#refreshed[@]}" -gt 0 ]; then ws_info "refreshed from the kit: ${refreshed[*]}"; fi
+    if [ "${#kept[@]}" -gt 0 ]; then ws_info "kept (you edited them): ${kept[*]}"; fi
+    if [ "${#refreshed[@]}" -eq 0 ] && [ "${#kept[@]}" -eq 0 ]; then ws_info "refresh: every kit file is current"; fi
+elif [ "$key_changed" -eq 1 ] && [ "${#refreshed[@]}" -gt 0 ]; then
+    ws_info "opencode.json re-rendered for the Lumen key mode $key_mode"
+fi
+if [ "$changed" -eq 0 ]; then
+    ws_info "workspace $ws is already up to date; nothing changed"
+else
+    ws_info "workspace ready: $ws"
+fi
+if [ "$backend" = standby ]; then shown_model=$WS_STANDBY_MODEL; else shown_model=lumen/$WS_MODEL_DEFAULT; fi
+if ws_is_login_node; then
+    printf '\nNext (%s is a login node, shared by everyone on Delta: a compute-node shell first is recommended):\n  %s' \
+        "$(hostname)" "$(ws_session_srun)"
+else
+    printf '\nNext:'
+fi
+printf '\n  cd %s\n  hpc-gpt   (or opencode; claude, codex, gemini if you have them: see guide/BYO-HARNESS.md)\n  type: start\n' "$ws"
+ws_info "backend: $backend; Lumen key: $key_mode; default model: $shown_model"
+exit "${share_rc:-0}"

@@ -1,0 +1,24 @@
+# Results
+
+JOBID: <job id whose log holds every number below>
+
+## Evidence
+
+Copy each line exactly as the log prints it.
+
+- `[ws-env] host=<node> job=<id> gpu=<name|none> module=<module>`
+- `<KEY>: <value>`
+- `RESULTS_OK`
+- plot: `<topic>.png`
+
+## What changed
+
+<The one change you made to the prepared code or job script, or "none".>
+
+## How it was verified
+
+<sacct line (State, Partition, Reservation, AllocTRES), the grep that found the numbers in the log, ws-check level.>
+
+## One limitation
+
+<What this run does not show, in one sentence.>

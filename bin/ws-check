@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ws-check: deterministic acceptance level 0-3 for a topic, from sacct, the job log and RESULTS.md.
+# Design: staging/agents-workshop/design/kit.md §3 (level ladder) and §4. Runs the kit's read-only
+# topics/<topic>/check.sh, never the workspace copy, and never modifies a file.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-check <topic> [--tailored] [--json]
+
+Prints LEVEL: n (label), the checks, the evidence and one hint: line for the next level.
+  0  no finished job from this workspace today
+  1  a job ran (any end state)
+  2  it COMPLETED on the workshop partition and reservation with the right GPUs, and its
+     log has [ws-env], the topic's evidence lines inside their thresholds, and RESULTS_OK
+  3  RESULTS.md cites that JOBID, its numbers match the log, and the plot is newer than the log
+
+  --tailored   thresholds relax to "metric present in the log and matching RESULTS.md";
+               the scheduler checks stay
+  --json       one JSON object instead of text
+EOF
+}
+
+topic=
+pass=()
+for arg in "$@"; do
+    case $arg in
+        --tailored|--json) pass+=("$arg") ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        -*) ws_err "unknown option: $arg"; usage >&2; exit "$WS_E_USAGE" ;;
+        *)
+            if [ -n "$topic" ]; then ws_err "one topic only (got $topic and $arg)"; exit "$WS_E_USAGE"; fi
+            topic=$arg ;;
+    esac
+done
+
+ws_load_env
+
+# kit_check <topic>: the kit's check.sh for a topic ($WS_KIT_RO/topics, else the template's topics).
+kit_check() {
+    local d
+    for d in "$WS_KIT_RO/topics" "$WS_KIT_RO/workspace-template/topics"; do
+        if [ -f "$d/$1/check.sh" ]; then printf '%s\n' "$d/$1/check.sh"; return 0; fi
+    done
+    return 1
+}
+
+# known_topics: the topics that have a check.sh in the kit.
+known_topics() {
+    local f seen=" " t
+    for f in "$WS_KIT_RO"/topics/*/check.sh "$WS_KIT_RO"/workspace-template/topics/*/check.sh; do
+        [ -f "$f" ] || continue
+        t=$(basename "$(dirname "$f")")
+        case $seen in *" $t "*) ;; *) seen="$seen$t "; printf '%s\n' "$t" ;; esac
+    done
+}
+
+if [ -z "$topic" ]; then
+    ws_err "which topic? one of: $(known_topics | tr '\n' ' ')"
+    usage >&2
+    exit "$WS_E_USAGE"
+fi
+if ! [[ $topic =~ ^[a-z0-9][a-z0-9-]*$ ]] || ! check=$(kit_check "$topic"); then
+    # Topic 5 tailors a base topic, whose checker relaxes its thresholds with --tailored.
+    if [ "$topic" = tailor ]; then
+        ws_err "tailor: run ws-check <base topic> --tailored (the base topic is in PLAN.md)"
+    fi
+    ws_err "no checker for topic '$topic'; known topics: $(known_topics | tr '\n' ' ')"
+    exit "$WS_E_USAGE"
+fi
+
+ws=$(ws_find_workspace || true)
+if [ -z "$ws" ] && [ -e "$HOME/ws-$WS_DATE/.ws-workspace" ]; then ws=$HOME/ws-$WS_DATE; fi
+if [ -z "$ws" ]; then
+    ws_die "$WS_E_ENV" "no workspace found (no .ws-workspace above $PWD and WS_HOME is unset); run ws-init first"
+fi
+
+export WS_HOME=$ws WS_KIT_RO
+exec bash "$check" "${pass[@]}"

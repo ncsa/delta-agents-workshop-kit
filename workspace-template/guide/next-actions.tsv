@@ -1,0 +1,10 @@
+M0	check the node with hostname (a compute node is recommended), name the three layers, then ws-progress M0 and open guide/01-orient.md
+M1	where you are (this session is a Slurm job on a compute node), what is in the workspace, account, quota, reservation, permissions (guide/01-orient.md), then ws-progress M1
+M2	choose a topic, a short survey, one or two choices, write and approve PLAN.md (guide/02-choose.md), then ws-progress M2
+M3	prove the environment in a job: ws-submit topics/<topic>/envcheck.sbatch (guide/03-env.md)
+M4	read src/ and job.sbatch, the planned change, git diff, dry-run ws-submit (guide/04-build.md)
+M5	ws-submit --yes the job, then ws-wait, ws-log, sacct (guide/05-run.md)
+M6	analyze.py, RESULTS.md, ws-check <topic> until level 3 (guide/06-analyze.md)
+M7	the prepared topic at level 3 first; then open-ended, until a typed "wrap up": a goal from topics/open-ended/IDEAS.md, open/ scaffolded as a small project (README.md, AGENTS.md, PLAN.md), the venv, one job per iteration (10 at most), you steer; after each result the next iteration (guide/07-open.md)
+M8	summarise both parts, two or three take-home points from ON-YOUR-OWN.md (guide/08-wrap.md)
+DONE	the session has ended: commit your work; ON-YOUR-OWN.md is the take-home guide for your own project

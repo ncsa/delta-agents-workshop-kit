@@ -1,0 +1,44 @@
+Lmod Warning:
+'cray-mpich' requires a network targeting module to be loaded.
+Try 'module avail craype-network' to list the available network
+ targeting modules. 
+While processing the following module(s):
+    Module fullname   Module Filename
+    ---------------   ---------------
+    PrgEnv-gnu/8.7.0  /opt/cray/pe/lmod/modulefiles/core/PrgEnv-gnu/8.7.0.lua
+    default-rh96      /sw/rh9.4/user/modules/default-rh96.lua
+
+Running "module reset". Resetting modules to system default. The following $MODULEPATH directories have been removed: /sw/rh9.4/spack/default/modules/lmod/linux-rhel9-x86_64/Core /opt/cray/pe/lmod/modulefiles/mpi/gnu/10.0/ofi/1.0/cray-mpich/8.0
+[ws-env] host=cn061.delta.ncsa.illinois.edu job=22511559 gpu=none module=PrgEnv-gnu cc=/opt/cray/pe/craype/2.7.36/bin/cc
+mkdir -p build
+/opt/cray/pe/craype/2.7.36/bin/cc -O2 -std=gnu11 -Wall -o build/pi_serial src/pi_serial.c
+/opt/cray/pe/craype/2.7.36/bin/cc -O2 -std=gnu11 -Wall -fopenmp -o build/pi_omp src/pi_omp.c
+/opt/cray/pe/craype/2.7.36/bin/cc -O2 -std=gnu11 -Wall -o build/pi_mpi src/pi_mpi.c
+PROGRAM: pi_serial N: 1000000000
+RESULT: 3.141592653589971 TIME: 1.7513 WORKERS: 1
+PROGRAM: pi_omp N: 1000000000
+RESULT: 3.141592653589971 TIME: 1.6131 WORKERS: 1
+srun: Job step's --cpus-per-task value exceeds that of job (2 > 1). Job step may never run.
+PROGRAM: pi_omp N: 1000000000
+RESULT: 3.141592653589901 TIME: 0.8761 WORKERS: 2
+srun: Job step's --cpus-per-task value exceeds that of job (4 > 1). Job step may never run.
+PROGRAM: pi_omp N: 1000000000
+RESULT: 3.141592653589821 TIME: 0.4748 WORKERS: 4
+srun: Job step's --cpus-per-task value exceeds that of job (8 > 1). Job step may never run.
+PROGRAM: pi_omp N: 1000000000
+RESULT: 3.141592653589769 TIME: 0.2972 WORKERS: 8
+srun: Job step's --cpus-per-task value exceeds that of job (16 > 1). Job step may never run.
+PROGRAM: pi_omp N: 1000000000
+RESULT: 3.141592653589833 TIME: 0.1493 WORKERS: 16
+PROGRAM: pi_mpi N: 1000000000
+RESULT: 3.141592653589833 TIME: 0.1487 WORKERS: 16
+SERIAL_TIME: 1.7513
+SPEEDUP_OMP1: 1.09
+SPEEDUP_OMP2: 2.00
+SPEEDUP_OMP4: 3.69
+SPEEDUP_OMP8: 5.89
+SPEEDUP_OMP16: 11.73
+SPEEDUP_MPI16: 11.78
+RESULT_SPREAD: 2.021e-13
+RESULT_AGREE: yes
+RESULTS_OK

@@ -1,0 +1,26 @@
+# Results: llm-batch
+
+JOBID: <job id of the LLMFlux job whose results file holds every number below>
+
+## Evidence
+
+Printed by `python analyze.py results/results.json` for that job's results file:
+
+- results file: <path of the results file>
+- job log: <logs/<jobid>.out>
+- ANSWERED: <records with a non-empty output, of 40>
+- JSON_VALID_RATE: <valid JSON answers / records, 0-1>
+- P50_LATENCY_MS: <median request latency in ms>
+- plot: `llm-batch.png`
+
+## What changed
+
+<The one change you made (model, max tokens, temperature, prompts, ...), or "none".>
+
+## How it was verified
+
+<The sacct line (State, Partition, Reservation, AllocTRES gres/gpu=1), the analyze.py output the numbers come from, and the ws-check level.>
+
+## One limitation
+
+<What this run does not show, in one sentence (for example: one model, 40 prompts, one run at temperature 0).>

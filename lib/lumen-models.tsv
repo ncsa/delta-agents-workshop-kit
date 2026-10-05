@@ -1,0 +1,14 @@
+# lib/lumen-models.tsv: the kit's caps for Lumen models (provider "lumen"). ws-init renders one
+# provider.lumen.models entry per id in WS_LUMEN_MODELS from this table; an id without a row is an
+# error at ws-init and at publish. Columns (tab-separated): id, context, output, note.
+# limit.context caps each session (compaction at context - min(output, 32000)).
+# Measured 2026-09-29 with the NCSA key (hpc-gpt, opencode 1.18.23): qwen3.8-27b, deepseek-v4-flash and
+# nemotron-3-super-120b-a12b answer; glm-5.3-flash had no access on 2026-09-29; it and glm-5.3 answer on 2026-10-02; glm-5.2 is gone.
+# Offered on /models since C22 (Q41, Q42): glm-5.3 (default), glm-5.3-flash, qwen3.8-27b, in that order.
+glm-5.3	131072	16384	default (Q41): answers with the NCSA key (2026-10-02); C21 gate: level 3 in 4/4 topics, fastest median turn
+glm-5.3-flash	131072	16384	second on /models (Q42): answers with the NCSA key (2026-10-02; no access on 2026-09-29); C21 gate tied with glm-5.3
+qwen3.8-27b	131072	16384	third on /models (Q42, another family) and the small model (L12: session titles); answers with the NCSA key (2026-09-29)
+nemotron-3-super-120b-a12b	131072	16384	answers with the NCSA key (2026-09-29) but not offered (Q42): C21 gate: 10-minute first replies, 7.3% stalls or empty replies, a PLAN.md loop at level 0
+deepseek-v4-flash	131072	16384	not default: empty replies in agent sessions on Lumen (2026-09-26)
+qwen3.8-flash	131072	16384	added Oct 5 (operator): answers with the NCSA key; untested as the workshop agent; listed on /models as a fallback while glm-5.3 has no access
+qwen3-coder-next	120000	16384	added Oct 5 (operator): answers with the NCSA key (site limit 131066); untested as the workshop agent; listed on /models as a fallback

@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# ws-standby: which model backend answers (NCSA Lumen or the Delta standby), and switch this
+# workspace's opencode.json between them. Participant tool; it never prints a key.
+# Design: staging/agents-workshop/design/open-models.md §1.6.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-standby status|on|off [--json]
+
+  status  probe the standby and Lumen, show which one this workspace uses and the workshop
+          default (WS_BACKEND_DEFAULT: lumen, standby or split), and advise.
+          Exit 0 both up, 1 standby down, 2 Lumen down, 3 both down.
+  on      switch this workspace's opencode.json to the standby (refused when it is down)
+  off     switch back to the Lumen default model
+EOF
+}
+
+cmd=
+json=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        status|on|off)
+            if [ -n "$cmd" ]; then usage >&2; exit "$WS_E_USAGE"; fi
+            cmd=$1 ;;
+        --json) json=1 ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        *) ws_err "unknown argument: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+    esac
+    shift
+done
+if [ -z "$cmd" ]; then usage >&2; exit "$WS_E_USAGE"; fi
+
+ws_load_env
+ws_backend_check || exit "$WS_E_ENV"
+: "${USER:=$(id -un)}"
+assigned=$(ws_backend_assign "$USER")
+lumen_url=${WS_LUMEN_URL:-$WS_LUMEN_URL_DEFAULT}
+lumen_url=${lumen_url%/}
+case $WS_MODEL_DEFAULT in
+    ''|*[!A-Za-z0-9._-]*) ws_die "$WS_E_ENV" "WS_MODEL_DEFAULT='$WS_MODEL_DEFAULT' is not a plain model id" ;;
+esac
+
+ws=$(ws_find_workspace || true)
+if [ -z "$ws" ] && [ -e "$HOME/ws-$WS_DATE/.ws-workspace" ]; then ws=$HOME/ws-$WS_DATE; fi
+oc=${ws:+$ws/opencode.json}
+
+# curl_cfg_quote <s>: escape a value for a double-quoted curl config string.
+curl_cfg_quote() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; printf '%s' "$s"; }
+
+# probe <url> <keyfile> <noproxy 0|1>: GET <url> with the key as a bearer token, 5 s timeout.
+# The key reaches curl on stdin (curl -K -), never on argv. Sets probe_http and probe_why.
+probe() {
+    local url=$1 keyf=$2 noproxy=$3 key extra='' rc=0
+    probe_http=000
+    probe_why=
+    if [ -z "$keyf" ]; then probe_why="key file not configured"; return 1; fi
+    if [ ! -r "$keyf" ]; then probe_why="key file not readable"; return 1; fi
+    if ! command -v curl >/dev/null 2>&1; then probe_why="curl not found"; return 1; fi
+    key=$(<"$keyf")
+    key=${key//[$' \t\r\n']/}
+    if [ -z "$key" ]; then probe_why="key file is empty"; return 1; fi
+    if [ "$noproxy" -eq 1 ]; then extra='noproxy = "*"'; fi
+    probe_http=$(printf 'url = "%s"\nheader = "Authorization: Bearer %s"\n%s\n' \
+            "$(curl_cfg_quote "$url")" "$(curl_cfg_quote "$key")" "$extra" \
+        | curl -s -o /dev/null -w '%{http_code}' --max-time 5 -K - 2>/dev/null) || rc=$?
+    key=
+    : "${probe_http:=000}"
+    if [ "$rc" -ne 0 ]; then
+        case $rc in
+            6) probe_why="host not found" ;;
+            7) probe_why="connection refused" ;;
+            28) probe_why="no answer within 5 s" ;;
+            *) probe_why="curl error $rc" ;;
+        esac
+        return 1
+    fi
+    case $probe_http in
+        200) return 0 ;;
+        401|403) probe_why="key rejected (HTTP $probe_http)" ;;
+        *) probe_why="HTTP $probe_http" ;;
+    esac
+    return 1
+}
+
+# standby_endpoint: print the standby base URL from $WS_STANDBY_DIR/endpoint (empty if none).
+standby_endpoint() {
+    local e
+    [ -n "$WS_STANDBY_DIR" ] && [ -r "$WS_STANDBY_DIR/endpoint" ] || return 0
+    e=$(<"$WS_STANDBY_DIR/endpoint")
+    e=${e//[$' \t\r\n']/}
+    printf '%s' "${e%/}"
+}
+
+# probe_standby: sets sb_up (0/1), sb_why, sb_endpoint.
+probe_standby() {
+    sb_up=0
+    sb_why=
+    sb_endpoint=$(standby_endpoint)
+    if [ -z "$WS_STANDBY_DIR" ]; then sb_why="WS_STANDBY_DIR is not set (source the kit's env.sh)"; return 0; fi
+    if [ -z "$sb_endpoint" ]; then sb_why="no endpoint file"; return 0; fi
+    case $sb_endpoint in
+        *standby.invalid*) sb_why="switched off by staff"; return 0 ;;
+    esac
+    if probe "$sb_endpoint/models" "$WS_STANDBY_DIR/key" 1; then sb_up=1; else sb_why=$probe_why; fi
+}
+
+# lumen_key_mode: "<mode> <source>" from ws-init's resolution (ws_lumen_key_resolve: the workspace's
+# saved choice, else WS_LUMEN_KEY, else auto); when that key cannot be used, the mode this workspace
+# was rendered with (PROGRESS.md), else site.
+lumen_key_mode() {
+    local m c
+    c=$(ws_lumen_key_choice "${ws:-}")
+    if m=$(ws_lumen_key_mode "${c%% *}" 2>/dev/null); then printf '%s %s\n' "$m" "${c#* }"; return 0; fi
+    m=$(ws_progress_field "${ws:+$ws/PROGRESS.md}" "lumen key")
+    case $m in site|personal|workshop) printf '%s rendered\n' "$m"; return 0 ;; esac
+    echo "site fallback"
+}
+
+# probe_lumen: sets lu_up (0/1), lu_why, lu_key (the key mode probed with) and lu_key_src (its source).
+probe_lumen() {
+    local r
+    lu_up=0
+    lu_why=
+    r=$(lumen_key_mode)
+    lu_key=${r%% *} lu_key_src=${r#* }
+    if probe "$lumen_url/models" "$(ws_lumen_key_file "$lu_key")" 0; then lu_up=1; else lu_why=$probe_why; fi
+}
+
+# standby_status_json: print "state=... model=..." from $WS_STANDBY_DIR/status.json (empty if none).
+standby_status_json() {
+    local f=$WS_STANDBY_DIR/status.json
+    [ -n "$WS_STANDBY_DIR" ] && [ -r "$f" ] || return 0
+    if ! command -v python3 >/dev/null 2>&1; then printf 'present (python3 not found to read it)'; return 0; fi
+    python3 - "$f" <<'PY' 2>/dev/null || printf 'unreadable'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("unreadable", end="")
+    sys.exit(0)
+if not isinstance(d, dict):
+    print("unreadable", end="")
+    sys.exit(0)
+print(" ".join(f"{k}={d[k]}" for k in ("state", "model", "replicas", "job", "since") if d.get(k) is not None), end="")
+PY
+}
+
+# current_model: print the top-level "model" value of opencode.json (the first "model": line).
+current_model() {
+    [ -n "$oc" ] && [ -f "$oc" ] || return 0
+    sed -nE 's/^[[:space:]]*"model"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$oc" | head -n 1
+}
+
+# backend_of <model>: standby, lumen or other.
+backend_of() {
+    case $1 in
+        standby/*) echo standby ;;
+        lumen/*|lumen-ws/*) echo lumen ;;
+        '') echo none ;;
+        *) echo other ;;
+    esac
+}
+
+if [ "$cmd" = status ]; then
+    probe_standby
+    probe_lumen
+    sb_status=$(standby_status_json)
+    model=$(current_model)
+    backend=$(backend_of "$model")
+    rc=0
+    if [ "$sb_up" -eq 0 ]; then rc=$((rc + 1)); fi
+    if [ "$lu_up" -eq 0 ]; then rc=$((rc + 2)); fi
+    case $rc/$backend in
+        0/standby) advice="Both backends answer; you are on the standby. Stay there unless a helper says to switch back (ws-standby off)." ;;
+        0/*) advice="Both backends answer; stay on Lumen. If replies stall for more than 2 minutes, press Esc and retry once." ;;
+        1/standby) advice="The standby is down and this workspace uses it: run 'ws-standby off', then in the TUI: /models, then NCSA Lumen." ;;
+        1/*) advice="Lumen answers; stay on it (the standby is only for Lumen trouble)." ;;
+        2/standby) advice="Lumen is not answering; you are already on the standby. Stay there." ;;
+        2/*) advice="Lumen is not answering: run 'ws-standby on', then in the TUI: /models, then Workshop standby." ;;
+        3/*) advice="Neither backend answers: show this output to a helper as they walk past; the agent cannot answer until a backend is back." ;;
+    esac
+    if [ "$json" -eq 1 ]; then
+        printf '{"standby":{"up":%s,"endpoint":%s,"reason":%s,"status":%s},' \
+            "$([ "$sb_up" -eq 1 ] && echo true || echo false)" "$(ws_json_str "$sb_endpoint")" \
+            "$(ws_json_str "$sb_why")" "$(ws_json_str "$sb_status")"
+        printf '"lumen":{"up":%s,"url":%s,"reason":%s,"key":%s,"key_source":%s},' \
+            "$([ "$lu_up" -eq 1 ] && echo true || echo false)" "$(ws_json_str "$lumen_url")" "$(ws_json_str "$lu_why")" \
+            "$(ws_json_str "$lu_key")" "$(ws_json_str "$lu_key_src")"
+        printf '"workspace":%s,"model":%s,"backend":%s,"default":%s,"assignment":%s,"advice":%s,"exit":%d}\n' \
+            "$(ws_json_str "$ws")" "$(ws_json_str "$model")" "$(ws_json_str "$backend")" \
+            "$(ws_json_str "$WS_BACKEND_DEFAULT")" "$(ws_json_str "$assigned")" "$(ws_json_str "$advice")" "$rc"
+        exit "$rc"
+    fi
+    if [ "$sb_up" -eq 1 ]; then
+        ws_info "standby: UP ($sb_endpoint)"
+    else
+        ws_info "standby: DOWN (${sb_why:-unknown}${sb_endpoint:+; $sb_endpoint})"
+    fi
+    if [ -n "$sb_status" ]; then ws_info "standby status.json: $sb_status"; fi
+    if [ "$lu_up" -eq 1 ]; then
+        ws_info "lumen: UP ($lumen_url; key: $lu_key, $lu_key_src)"
+    else
+        ws_info "lumen: DOWN (${lu_why:-unknown}; $lumen_url; key: $lu_key, $lu_key_src)"
+    fi
+    if [ -z "$ws" ]; then
+        ws_info "this workspace: none found (cd into your workspace)"
+    elif [ -z "$model" ]; then
+        ws_info "this workspace: no \"model\" in $oc"
+    else
+        ws_info "this workspace uses: $backend ($model)"
+    fi
+    if [ "$WS_BACKEND_DEFAULT" = split ]; then
+        ws_info "workshop default: split (cksum of the NetID: even lumen, odd standby); $USER is assigned: $assigned"
+    else
+        ws_info "workshop default: $WS_BACKEND_DEFAULT; $USER is assigned: $assigned"
+    fi
+    ws_info "advice: $advice"
+    exit "$rc"
+fi
+
+# on / off: edit the workspace's opencode.json.
+# say <msg>: ws_info, except with --json (stdout then carries only the JSON object).
+say() { if [ "$json" -eq 0 ]; then ws_info "$@"; fi; }
+if [ -z "$ws" ]; then ws_die "$WS_E_ENV" "no workspace found: cd into your workspace (or set WS_HOME) and retry"; fi
+if [ ! -f "$oc" ]; then ws_die "$WS_E_ENV" "no opencode.json in $ws (run ws-init)"; fi
+
+if [ "$cmd" = on ]; then
+    probe_standby
+    if [ "$sb_up" -eq 0 ]; then
+        ws_err "the standby is down (${sb_why:-unknown}); not switching. Run 'ws-standby status' for advice."
+        exit 1
+    fi
+    backend=standby     # small_model too: session titles would otherwise still go to Lumen
+    tui="In the TUI: /models, then Workshop standby"
+else
+    backend=lumen
+    tui="In the TUI: /models, then NCSA Lumen -> $WS_MODEL_DEFAULT"
+fi
+
+read -r new new_small < <(ws_backend_models "$backend")
+
+# Line-oriented edit of every "model": line (top level, agent.workshop, command.report); comments survive.
+tmp=$(mktemp "$oc.XXXXXX")
+ws_oc_set_models "$new" "$new_small" < "$oc" > "$tmp"
+if ! grep -qE '^[[:space:]]*"model"[[:space:]]*:' "$tmp"; then
+    rm -f "$tmp"
+    ws_die "$WS_E_ENV" "no \"model\": line found in $oc; restore it with ws-init --refresh-kit or ask a helper"
+fi
+if cmp -s "$tmp" "$oc"; then
+    rm -f "$tmp"
+    say "opencode.json already uses $new"
+else
+    cp -p "$oc" "$oc.bak"
+    cat "$tmp" > "$oc"
+    rm -f "$tmp"
+    say "opencode.json: model -> $new (previous version kept in opencode.json.bak)"
+fi
+
+WS_HOME=$ws "$WS_BIN_DIR/ws-progress" --set backend "$backend" >/dev/null \
+    || ws_warn "could not record the backend in PROGRESS.md"
+if [ -n "$WS_REPORTS" ]; then
+    # Group-readable (0640) so helpers can read it; Delta's umask 077 would make it 0600 (red-team L1).
+    if ! printf '%s %s %s\n' "$backend" "$(date -d "@$(ws_now_epoch)" +%Y-%m-%dT%H:%M)" \
+            "$(hostname -s 2>/dev/null || hostname)" > "$WS_REPORTS/$USER.backend" 2>/dev/null \
+        || ! chmod 0640 "$WS_REPORTS/$USER.backend" 2>/dev/null; then
+        ws_warn "could not write $WS_REPORTS/$USER.backend (helpers will not see the switch)"
+    fi
+fi
+
+if [ "$json" -eq 1 ]; then
+    printf '{"ok":true,"backend":%s,"model":%s,"workspace":%s,"tui":%s}\n' \
+        "$(ws_json_str "$backend")" "$(ws_json_str "$new")" "$(ws_json_str "$ws")" "$(ws_json_str "$tui")"
+    exit "$WS_E_OK"
+fi
+ws_info "PROGRESS.md: backend: $backend"
+ws_info "$tui"
+ws_info "(a new opencode start uses $new directly; a running one needs the /models step)"

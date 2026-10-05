@@ -1,0 +1,570 @@
+#!/usr/bin/env bash
+# ws-preflight: check your Delta account and the agent setup for the workshop, by Oct 2.
+# Design: staging/agents-workshop/design/kit.md §4 and §9 (risks 1, 3, 5, 8, 10).
+# Runs on a login node by design: it is the one sanctioned login-node use, and its only heavy
+# step (one opencode call) is bounded by `timeout`.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-preflight [--byo claude|codex|gemini|copilot|aider] [--json] [--no-prewarm]
+
+Checks your account, group, quota, the kit, the reservations, the hpc-gpt module,
+file ACLs and the allocation's quota, and asks opencode one short question with the
+workshop agent (about 10 seconds; at most 10 minutes if the network hangs). Each check
+prints OK, WARN or FAIL with a one-line fix.
+
+  --byo <name>    you plan to bring your own agent CLI: print its notes and check
+                  that its binary is on PATH
+  --json          print the report as JSON on stdout (the text goes to stderr)
+  --no-prewarm    skip the opencode call (check 7 then reports WARN)
+
+Writes ~/.ws/preflight.json and, for the staff, $WS_REPORTS/$USER.json.
+Exit 0 when nothing FAILs (WARNs are fine), 1 otherwise.
+EOF
+}
+
+byo=
+json=0
+prewarm=1
+while [ $# -gt 0 ]; do
+    case $1 in
+        --byo)
+            [ $# -ge 2 ] || { ws_err "--byo needs a harness name"; usage >&2; exit "$WS_E_USAGE"; }
+            byo=$2; shift ;;
+        --byo=*) byo=${1#--byo=} ;;
+        --json) json=1 ;;
+        --no-prewarm) prewarm=0 ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        *) ws_err "unknown argument: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+    esac
+    shift
+done
+case $byo in
+    ''|claude|codex|gemini|copilot|aider) ;;
+    *) ws_err "unknown harness for --byo: $byo (claude, codex, gemini, copilot or aider)"; exit "$WS_E_USAGE" ;;
+esac
+
+ws_load_env
+: "${USER:=$(id -un)}"
+export USER
+
+# Human-readable lines go to stdout, or to stderr under --json (stdout then carries only JSON).
+if [ "$json" -eq 1 ]; then exec 3>&2; else exec 3>&1; fi
+say() { printf '%s\n' "$*" >&3; }
+
+state=$HOME/.ws
+mkdir -p "$state"
+pf=$state/preflight                  # throwaway workspace for the pre-warm
+ph=$state/preflight.placeholder      # stand-in standby files while the real ones are missing
+host=$(hostname 2>/dev/null || echo unknown)
+started=$(date -Iseconds)
+kit_version=$(head -n 1 "$WS_KIT_RO/VERSION" 2>/dev/null || echo unknown)
+tmo=${WS_PREFLIGHT_TIMEOUT:-600}
+quota_out=
+
+C_N=() C_ID=() C_ST=() C_DETAIL=() C_FIX=() C_SEC=()
+prewarm_seconds=
+prewarm_outcome=
+started_before=
+prewarm_error=
+acl_home=
+key_used=
+key_mode=
+key_src=
+key_desc=
+# The participant's own workspace (it may not exist yet): its saved --lumen-key choice counts.
+real_ws=${WS_HOME:-$HOME/ws-$WS_DATE}
+
+# record <n> <id> <OK|WARN|FAIL> <detail> [fix] [seconds]: store a check and print it.
+record() {
+    C_N+=("$1"); C_ID+=("$2"); C_ST+=("$3"); C_DETAIL+=("$4"); C_FIX+=("${5:-}"); C_SEC+=("${6:-0}")
+    printf '[ws] %-2s %-4s %-12s %s\n' "$1" "$3" "$2" "$4" >&3
+    if [ "$3" != OK ] && [ -n "${5:-}" ]; then printf '[ws]              fix: %s\n' "$5" >&3; fi
+}
+
+# tokens_have <word> <text>: succeed when <word> is one whitespace- or |-separated token of <text>.
+tokens_have() {
+    WS_W=$1 awk 'BEGIN { w = ENVIRON["WS_W"] } { n = split($0, t, /[ \t|,]+/); for (i = 1; i <= n; i++) if (t[i] == w) f = 1 } END { exit f ? 0 : 1 }' <<<"$2"
+}
+
+# plain_err <file>: opencode's stderr without colour codes.
+plain_err() { sed 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null; }
+
+# with_hpcgpt <cmd>...: run <cmd> with the hpc-gpt module loaded; exit 97 when the load fails.
+with_hpcgpt() { ws_with_hpcgpt "$@"; }
+
+# pct <used> <limit>: integer percentage, or empty when there is no limit.
+pct() { awk -v u="$1" -v l="$2" 'BEGIN { if (l + 0 > 0) printf "%d\n", (u * 100) / l }'; }
+
+say "[ws] ws-preflight on $host as $USER (kit $kit_version, $WS_KIT_RO)"
+if ! ws_is_login_node; then say "[ws] notice: not a login node; that is fine, the checks are the same"; fi
+
+# 1. Slurm accounts.
+t0=$SECONDS
+if [ -z "$WS_ACCOUNT_CPU" ] || [ -z "$WS_ACCOUNT_GPU" ]; then
+    record 1 accounts FAIL "WS_ACCOUNT_CPU/WS_ACCOUNT_GPU are not set in workshop.env" \
+        "tell the workshop staff: the kit is not configured yet"
+elif ! command -v accounts >/dev/null 2>&1; then
+    record 1 accounts WARN "the accounts command is not available here" "run ws-preflight on a Delta login node"
+elif ! acc_out=$(timeout 60 accounts 2>/dev/null); then
+    record 1 accounts WARN "accounts failed or timed out" "try again in a few minutes; if it persists, email help@ncsa.illinois.edu"
+else
+    missing=()
+    for a in "$WS_ACCOUNT_CPU" "$WS_ACCOUNT_GPU"; do tokens_have "$a" "$acc_out" || missing+=("$a"); done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        record 1 accounts OK "$WS_ACCOUNT_CPU and $WS_ACCOUNT_GPU are listed" "" $((SECONDS - t0))
+    else
+        record 1 accounts FAIL "not on your accounts list: ${missing[*]}" \
+            "you are not on the workshop allocation yet: reply to the pre-flight email with your NetID" $((SECONDS - t0))
+    fi
+fi
+
+# 2. Unix group of the allocation (file access to the kit, the share and reports directories).
+grp=delta_$WS_CODE
+if [ -z "$WS_CODE" ]; then
+    record 2 group FAIL "WS_CODE is not set in workshop.env" "tell the workshop staff: the kit is not configured yet"
+elif tokens_have "$grp" "$(id -nG 2>/dev/null || true)"; then
+    record 2 group OK "you are in $grp"
+else
+    record 2 group FAIL "you are not in the group $grp" \
+        "group membership follows the allocation within a day; log out and in again, then reply to the pre-flight email if it persists"
+fi
+
+# 3. Home quota (the opencode cache and the workspace live in $HOME).
+t0=$SECONDS
+if ! command -v quota >/dev/null 2>&1; then
+    record 3 quota WARN "the quota command is not available here" "run ws-preflight on a Delta login node"
+else
+    # quota also prints "Unable to get a filedescriptor from mountpoint: /dev/shm/usertmp" on
+    # login nodes (per-user /tmp); that line is on stderr and harmless.
+    quota_out=$(timeout 60 quota 2>/dev/null || true)
+    home_real=$(cd "$HOME" 2>/dev/null && pwd -P || printf '%s' "$HOME")
+    read -r bpct fpct < <(WS_H1=$HOME WS_H2=$home_real awk -F'|' '
+        function num(s,   u, v) {
+            gsub(/[ *\t]/, "", s); u = substr(s, length(s)); v = s + 0
+            if (u == "k" || u == "K") v *= 1024; else if (u == "M") v *= 1048576
+            else if (u == "G") v *= 1073741824; else if (u == "T") v *= 1099511627776
+            return v
+        }
+        function pc(u, l) { return (l > 0) ? int(u * 100 / l) : -1 }
+        /^Quota usage for user/ { in_user = 1; next }
+        /^Quota usage for/ { in_user = 0; next }
+        in_user && NF >= 8 {
+            p = $2; gsub(/^[ \t]+|[ \t]+$/, "", p)
+            if (p !~ /^\//) next
+            row = pc(num($3), num($4)) " " pc(num($6), num($7))
+            if (p == ENVIRON["WS_H1"] || p == ENVIRON["WS_H2"]) { exact = row }
+            else if (first == "") { first = row }
+        }
+        END { if (exact != "") print exact; else if (first != "") print first; else print "x x" }' <<<"$quota_out")
+    if [ "$bpct" = x ] || [ "$bpct" = -1 ]; then
+        record 3 quota WARN "could not read your home usage from quota" "run quota yourself; keep home below 90 %" $((SECONDS - t0))
+    elif [ "$bpct" -ge 90 ] || [ "$fpct" -ge 90 ]; then
+        record 3 quota FAIL "home is ${bpct} % full (blocks) and ${fpct} % (files)" \
+            "delete or move files out of \$HOME until both are below 90 % (opencode needs ~50 MB)" $((SECONDS - t0))
+    else
+        record 3 quota OK "home ${bpct} % of blocks, ${fpct} % of files" "" $((SECONDS - t0))
+    fi
+fi
+
+# 4. The read-only kit.
+if [ -r "$WS_KIT_RO/AGENTS.md" ]; then
+    record 4 kit OK "$WS_KIT_RO/AGENTS.md is readable"
+elif [ -r "$WS_KIT_RO/workspace-template/AGENTS.md" ]; then
+    record 4 kit OK "$WS_KIT_RO/workspace-template/AGENTS.md is readable"
+else
+    record 4 kit FAIL "the kit is not readable at $WS_KIT_RO" \
+        "source the kit's env.sh from the pre-flight email; if that fails, you are not in $grp yet"
+fi
+
+# 5. Reservations (created by Delta ops shortly before the day: WARN until then).
+t0=$SECONDS
+res_worst=OK
+res_notes=()
+for kind in CPU GPU; do
+    rv=WS_RES_$kind av=WS_ACCOUNT_$kind
+    r=${!rv} a=${!av}
+    # C22: with a magnetic reservation (below) an empty WS_RES_* is the plan, not a gap.
+    if [ -z "$r" ] && [ -n "$WS_RES_MAGNETIC" ]; then continue; fi
+    if [ -z "$r" ]; then
+        res_notes+=("$rv is not set yet"); res_worst=WARN; continue
+    fi
+    if ! command -v scontrol >/dev/null 2>&1; then
+        res_notes+=("$r: scontrol not available"); res_worst=WARN; continue
+    fi
+    if ! out=$(timeout 30 scontrol show reservation "$r" 2>&1); then
+        if [[ $out == *"not found"* ]]; then
+            res_notes+=("$r does not exist yet")
+        else
+            res_notes+=("$r: scontrol failed")
+        fi
+        [ "$res_worst" = FAIL ] || res_worst=WARN
+        continue
+    fi
+    accts=$(tr ' ' '\n' <<<"$out" | sed -n 's/^Accounts=//p' | head -n 1)
+    users=$(tr ' ' '\n' <<<"$out" | sed -n 's/^Users=//p' | head -n 1)
+    if { [ -n "$a" ] && tokens_have "$a" "$accts"; } || tokens_have "$USER" "$users"; then
+        res_notes+=("$r lists ${a:-you}")
+    else
+        res_notes+=("$r exists but does not list ${a:-your account} (Accounts=${accts:-none})"); res_worst=FAIL
+    fi
+done
+# C22: the magnetic reservation takes the workshop accounts' jobs without --reservation. Informational:
+# not found is a WARN (ops may create it after the pre-flight), never a FAIL.
+if [ -n "$WS_RES_MAGNETIC" ]; then
+    if IFS='|' read -r m_st m_start m_end < <(ws_res_window "$WS_RES_MAGNETIC"); then
+        if [ "$m_st" = ACTIVE ]; then m_when="active${m_start:+ since $m_start}"
+        else m_when="${m_st,,}${m_start:+, starts $m_start}"; fi
+        # (no ";" inside a note: the detail joins the notes with "; ")
+        res_notes+=("$WS_RES_MAGNETIC (magnetic) found ($m_when${m_end:+, ends $m_end}): jobs need no --reservation")
+    else
+        res_notes+=("$WS_RES_MAGNETIC (magnetic) not found yet"); [ "$res_worst" = FAIL ] || res_worst=WARN
+    fi
+fi
+detail=$(IFS=';'; printf '%s' "${res_notes[*]}")
+detail=${detail//;/; }
+case $res_worst in
+    OK) record 5 reservations OK "$detail" "" $((SECONDS - t0)) ;;
+    WARN) record 5 reservations WARN "$detail" "nothing to do: the reservations appear the week of the workshop" $((SECONDS - t0)) ;;
+    FAIL) record 5 reservations FAIL "$detail" "tell the workshop staff which reservation does not list the account" $((SECONDS - t0)) ;;
+esac
+
+# 6. The hpc-gpt module, and no personal opencode configuration that can break it.
+t0=$SECONDS
+module_ok=0
+personal=()
+# opencode itself writes package.json, a lock file, .gitignore and node_modules into its config
+# directory on first start; only other entries mean a personal install or configuration.
+if [ -d "$HOME/.config/opencode" ]; then
+    while IFS= read -r -d '' e; do
+        case ${e##*/} in package.json|bun.lock|bun.lockb|package-lock.json|.gitignore|node_modules) ;; *) personal+=("\$HOME/.config/opencode/${e##*/}") ;; esac
+    done < <(find "$HOME/.config/opencode" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+fi
+if [ -d "$HOME/.opencode" ] && [ -n "$(find "$HOME/.opencode" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    personal+=("\$HOME/.opencode")
+fi
+set +e
+hp=$(with_hpcgpt sh -c 'command -v hpc-gpt' 2>/dev/null)
+rc=$?
+set -e
+if [ "$rc" -eq 97 ]; then
+    record 6 hpc-gpt FAIL "module load hpc-gpt failed" "run 'module reset; module load hpc-gpt' and send the error to help@ncsa.illinois.edu" $((SECONDS - t0))
+elif [ "$rc" -ne 0 ] || [ -z "$hp" ]; then
+    record 6 hpc-gpt FAIL "hpc-gpt is not on PATH after module load hpc-gpt" "send this output to help@ncsa.illinois.edu" $((SECONDS - t0))
+elif [ "${#personal[@]}" -gt 0 ]; then
+    module_ok=1
+    record 6 hpc-gpt WARN "module loads, but you have a personal opencode setup: ${personal[*]:0:5}" \
+        "the Delta docs warn that ~/.config/opencode or ~/.opencode can break the site module; move them aside (mv ~/.opencode ~/.opencode.off) before the session" $((SECONDS - t0))
+else
+    module_ok=1
+    record 6 hpc-gpt OK "module load hpc-gpt works ($hp); no personal opencode setup" "" $((SECONDS - t0))
+fi
+
+# 7. opencode: one bounded call with the workshop agent in a throwaway workspace rendered by ws-init,
+# so the module, the kit's opencode.json, the agent and the route to the model service are all tried
+# before the day. A cold HOME is not slow on Delta: about 6 s with hpc-gpt 1.18.23 (2026-09-28; the
+# provider SDK is built in and only the plugin package goes to ~/.npm).
+t0=$SECONDS
+if [ -d "$HOME/.local/share/opencode" ]; then started_before=yes; else started_before=no; fi
+if [ "$prewarm" -eq 0 ]; then
+    prewarm_outcome=skipped
+    record 7 prewarm WARN "skipped (--no-prewarm): opencode was not tried" "run ws-preflight once without --no-prewarm"
+elif [ "$module_ok" -ne 1 ]; then
+    prewarm_outcome="not-run"
+    record 7 prewarm FAIL "not run: the hpc-gpt module failed (check 6)" "fix check 6, then run ws-preflight again"
+else
+    # Throwaway workspace rendered by ws-init itself, so opencode.json is exactly what the day uses,
+    # with the Lumen key mode the participant's own ws-init picks (ws_lumen_key_resolve: the choice
+    # saved in their workspace, else WS_LUMEN_KEY, else auto: personal, else a real workshop key,
+    # else the site key). The chosen mode is passed on, so a refused key fails here as it would in
+    # ws-init. The standby files may not exist yet: stand-ins let opencode start.
+    case $pf in "$HOME"/.ws/preflight) rm -rf -- "$pf" ;; esac
+    sb=$WS_STANDBY_DIR
+    key_choice=$(ws_lumen_key_choice "$real_ws" 2> "$state/preflight-key.err")
+    key_warn=$(sed -n 's/^\[ws\] warning: //p' "$state/preflight-key.err" | head -n 1)
+    if [ -n "$key_warn" ]; then say "[ws] warning: $key_warn"; fi
+    key_src=${key_choice#* }
+    key_mode=$(ws_lumen_key_mode "${key_choice%% *}" 2>/dev/null) || key_mode=
+    key_used=$key_mode
+    key_desc="${key_mode:-${key_choice%% *}}, $key_src"
+    if [ "$key_used" = workshop ] && ws_lumen_key_placeholder "$WS_LUMEN_KEY_FILE"; then
+        key_used=placeholder    # the file publish-ro-copy.sh writes until the real key is installed
+    fi
+    if [ -z "$sb" ] || [ ! -r "$sb/endpoint" ] || [ ! -r "$sb/key" ]; then
+        mkdir -p "$ph/standby"; sb=$ph/standby
+        printf 'http://standby.invalid:1/v1' > "$sb/endpoint"
+        printf 'preflight-placeholder-not-a-key' > "$sb/key"
+        chmod 600 "$sb/endpoint" "$sb/key"
+    fi
+    if ! WS_HOME=$pf WS_SHARE='' WS_STANDBY_DIR=$sb \
+        "$WS_BIN_DIR/ws-init" --allow-login --lumen-key "${key_choice%% *}" > "$state/preflight-init.log" 2>&1; then
+        prewarm_outcome="init-failed"
+        init_err=$(grep -m 1 '^\[ws\] error: ' "$state/preflight-init.log" | cut -c1-200) || init_err=
+        record 7 prewarm FAIL "could not create the throwaway workspace $pf (Lumen key: $key_desc)${init_err:+: ${init_err#\[ws\] error: }}" \
+            "fix what the line says (see $state/preflight-init.log), or send the log to the workshop staff"
+    else
+        say "[ws] opencode: asking the workshop agent one short question on lumen/$WS_MODEL_DEFAULT (Lumen key: $key_desc; usually about 10 s)"
+        tw=$(date +%s)
+        set +e
+        (
+            cd "$pf" || exit 3
+            export OPENCODE_DISABLE_FILEWATCHER=1 OPENCODE_DISABLE_AUTOUPDATE=1
+            with_hpcgpt timeout -k 10 "$tmo" hpc-gpt run --agent workshop -m "lumen/$WS_MODEL_DEFAULT" "Reply with the single word: ready"
+        ) < /dev/null > "$state/preflight-prewarm.out" 2> "$state/preflight-prewarm.err"
+        prc=$?
+        set -e
+        prewarm_seconds=$(( $(date +%s) - tw ))
+        errs=$(plain_err "$state/preflight-prewarm.err")
+        # The first error line (no secrets: opencode never prints the key), for the report and the staff.
+        prewarm_error=$(printf '%s\n' "$errs" | grep -m 1 -iE 'error|fail|refused|timed? ?out|not found' | cut -c1-160) || true
+        # opencode prints "> <agent> · <model>" once the workshop agent's session has started.
+        if printf '%s\n' "$errs" | grep -qE '^> workshop( |$)'; then agent_started=1; else agent_started=0; fi
+        # The answer must contain the word "ready" on a line that is not the echoed prompt.
+        if [ "$prc" -eq 0 ] && awk 'index($0, "Reply with the single word") == 0 && tolower($0) ~ /(^|[^a-z])ready([^a-z]|$)/ { f = 1 }
+                END { exit f ? 0 : 1 }' "$state/preflight-prewarm.out"; then
+            prewarm_outcome=ready
+            record 7 prewarm OK "opencode answered in ${prewarm_seconds} s (Lumen key: $key_desc)" "" "$prewarm_seconds"
+        elif [ "$prc" -eq 124 ] || [ "$prc" -eq 137 ]; then
+            prewarm_outcome=timeout
+            record 7 prewarm FAIL "opencode gave no answer within ${tmo} s (it retries silently on network errors; Lumen key: $key_desc)" \
+                "run ws-preflight again; if it fails twice, send ~/.ws/preflight-prewarm.err to the workshop staff" "$prewarm_seconds"
+        elif [ "$agent_started" -eq 0 ]; then
+            prewarm_outcome="not-started"
+            record 7 prewarm FAIL "opencode did not start the workshop agent (exit $prc; Lumen key: $key_desc):${prewarm_error:-no error text}" \
+                "send ~/.ws/preflight-prewarm.err to the workshop staff" "$prewarm_seconds"
+        else
+            # The same classes as ws-models (lib/ws-common.sh ws_probe_classify).
+            cls=$(ws_probe_classify "$prc" "$state/preflight-prewarm.out" "$state/preflight-prewarm.err" ready)
+            mdl=$WS_MODEL_DEFAULT
+            case $cls in
+                no-access)
+                    prewarm_outcome="no-access"
+                    record 7 prewarm FAIL "your key cannot use $mdl (Lumen key: $key_desc): No access to this model" \
+                        "your key cannot use $mdl: ask a helper (a personal key in ~/.config/lumen/key may have it)" "$prewarm_seconds" ;;
+                not-found)
+                    prewarm_outcome="not-found"
+                    record 7 prewarm FAIL "the kit's model list is stale: Lumen does not know $mdl (Lumen key: $key_desc): ${prewarm_error:-model not found}" \
+                        "the kit's model list is stale: tell a helper" "$prewarm_seconds" ;;
+                auth)
+                    if [ "$key_used" = placeholder ]; then
+                        prewarm_outcome="no-key"
+                        record 7 prewarm WARN "opencode starts and reaches the model service; the workshop key is not installed yet (fine before Oct 2; Lumen key: $key_desc)" \
+                            "nothing to do now; run ws-preflight again once the staff say the key is in place" "$prewarm_seconds"
+                    else
+                        prewarm_outcome="auth"
+                        case $key_used in
+                            personal) fix="check the key in ~/.config/lumen/key (or remove it to use the site key), then run ws-preflight again" ;;
+                            workshop) fix="tell the workshop staff (the workshop key may be disabled or not yet active)" ;;
+                            *) fix="tell the workshop staff (the site key of the hpc-gpt module was rejected)" ;;
+                        esac
+                        record 7 prewarm FAIL "the model service rejected the $key_used key (Lumen key: $key_desc):${prewarm_error:-authentication error}" \
+                            "$fix" "$prewarm_seconds"
+                    fi ;;
+                *)
+                    prewarm_outcome="call-failed"
+                    record 7 prewarm FAIL "opencode started, but the model call failed (exit $prc; Lumen key: $key_desc): ${prewarm_error:-no error text}" \
+                        "run ws-preflight again; if it fails twice, send ~/.ws/preflight-prewarm.err to the workshop staff" "$prewarm_seconds" ;;
+            esac
+        fi
+    fi
+fi
+
+# 8. ACLs on $WS_SHARE/$USER, a per-user share directory (unused in the session since C23; the check
+# stays so the numbering holds); home (NFS) is reported, not required.
+t0=$SECONDS
+if command -v setfacl >/dev/null 2>&1; then
+    tf=$(mktemp "$state/acl-test.XXXXXX" 2>/dev/null) || tf=
+    if [ -n "$tf" ] && setfacl -m "u:$USER:r" "$tf" 2>/dev/null; then acl_home=yes; else acl_home=no; fi
+    [ -z "$tf" ] || rm -f -- "$tf"
+fi
+if [ -z "$WS_SHARE" ]; then
+    record 8 acl WARN "WS_SHARE is not configured (home ACLs: ${acl_home:-unknown})" "tell the workshop staff"
+elif ! command -v setfacl >/dev/null 2>&1; then
+    record 8 acl WARN "setfacl is not available here" "run ws-preflight on a Delta login node"
+else
+    share=$WS_SHARE/$USER
+    made=
+    if [ ! -d "$share" ]; then
+        if mkdir -p "$share" 2>/dev/null; then
+            # Same as ws-init: strip the inherited default ACL so the directory starts owner-only.
+            setfacl -b -k "$share" 2>/dev/null || true
+            chmod 700 "$share"
+            made=" (created, owner only)"
+        fi
+    fi
+    if [ ! -d "$share" ]; then
+        record 8 acl FAIL "cannot create $share (home ACLs: $acl_home)" \
+            "you are probably not in $grp yet (check 2); otherwise tell the workshop staff" $((SECONDS - t0))
+    elif owner=$(stat -c %U -- "$share" 2>/dev/null) && [ "$owner" != "$(id -un)" ]; then
+        # Sticky, group-writable parent: another user created this name first (red-team M10).
+        record 8 acl FAIL "$share is owned by $owner, not by you" \
+            "owned by $owner; ask a helper" $((SECONDS - t0))
+    else
+        sf=$(mktemp "$share/.acl-test.XXXXXX" 2>/dev/null) || sf=
+        if [ -n "$sf" ] && setfacl -m "u:$USER:r" "$sf" 2>/dev/null; then
+            record 8 acl OK "setfacl works on $share$made; home ACLs: $acl_home" "" $((SECONDS - t0))
+        else
+            record 8 acl WARN "setfacl does not work in $share$made; home ACLs: $acl_home" \
+                "a per-user share directory (unused in the session): nothing to do" $((SECONDS - t0))
+        fi
+        [ -z "$sf" ] || rm -f -- "$sf"
+    fi
+fi
+
+# 9. Allocation storage: lfs quota -p on the kit's /work area (and /projects/<code> from quota).
+t0=$SECONDS
+area=
+case $WS_KIT_RO in /work/*/*/*) area=$(cut -d/ -f1-4 <<<"$WS_KIT_RO") ;; esac
+if [ -z "$area" ] && [ -n "$WS_CODE" ]; then area=/work/hdd/$WS_CODE; fi
+lq_st=OK lq_notes=()
+if [ -z "$area" ]; then
+    lq_st=WARN; lq_notes+=("no allocation area known (WS_CODE unset)")
+elif ! command -v lfs >/dev/null 2>&1; then
+    lq_st=WARN; lq_notes+=("lfs is not available here")
+else
+    pid=$(timeout 30 lfs project -d "$area" 2>/dev/null | awk 'NR == 1 { print $1 }') || pid=
+    if ! [[ $pid =~ ^[0-9]+$ ]] || [ "$pid" = 0 ]; then
+        lq_st=WARN; lq_notes+=("$area has no Lustre project id")
+    elif ! lq=$(timeout 60 lfs quota -q -p "$pid" "$area" 2>/dev/null); then
+        lq_st=WARN; lq_notes+=("lfs quota -p $pid $area failed or timed out")
+    else
+        # Fields after the file system name (it may sit on its own line): used quota limit grace
+        # files quota limit grace; sizes in KiB; '*' marks over-quota values.
+        read -r bu bq bl fu fq fl < <(awk '/^Disk quotas|Filesystem/ { next }
+            { for (i = 1; i <= NF; i++) t[++n] = $i }
+            END { for (i = 1; i <= n; i++) gsub(/\*/, "", t[i]); print t[2]+0, t[3]+0, t[4]+0, t[6]+0, t[7]+0, t[8]+0 }' <<<"$lq")
+        [ "$bq" -gt 0 ] || bq=$bl
+        [ "$fq" -gt 0 ] || fq=$fl
+        b=$(pct "$bu" "$bq"); f=$(pct "$fu" "$fq")
+        lq_notes+=("$area ${b:-no limit}${b:+ %} blocks, ${f:-no limit}${f:+ %} files")
+        if [ "${b:-0}" -gt 80 ] || [ "${f:-0}" -gt 80 ]; then lq_st=WARN; fi
+    fi
+fi
+if [ -n "$WS_CODE" ] && [ -n "$quota_out" ]; then
+    read -r pb pf_ < <(WS_P=/projects/$WS_CODE awk -F'|' '
+        function num(s,   u, v) {
+            gsub(/[ *\t]/, "", s); u = substr(s, length(s)); v = s + 0
+            if (u == "k" || u == "K") v *= 1024; else if (u == "M") v *= 1048576
+            else if (u == "G") v *= 1073741824; else if (u == "T") v *= 1099511627776
+            return v
+        }
+        NF >= 8 { p = $2; gsub(/^[ \t]+|[ \t]+$/, "", p)
+            if (p == ENVIRON["WS_P"]) { printf "%d %d\n", (num($4) > 0 ? num($3) * 100 / num($4) : 0), (num($7) > 0 ? num($6) * 100 / num($7) : 0); f = 1; exit } }
+        END { if (!f) print "x x" }' <<<"$quota_out")
+    if [ "$pb" != x ]; then
+        lq_notes+=("/projects/$WS_CODE $pb % blocks, $pf_ % files")
+        if [ "$pb" -gt 80 ] || [ "$pf_" -gt 80 ]; then lq_st=WARN; fi
+    fi
+fi
+detail=$(IFS=';'; printf '%s' "${lq_notes[*]}")
+detail=${detail//;/; }
+if [ "$lq_st" = OK ]; then
+    record 9 lfs-quota OK "$detail" "" $((SECONDS - t0))
+else
+    record 9 lfs-quota WARN "$detail" "tell the workshop staff (the allocation's storage is nearly full or could not be read)" $((SECONDS - t0))
+fi
+
+# 10. Bring-your-own harness notes.
+if [ -n "$byo" ]; then
+    case $byo in
+        claude)  title="Claude Code"; bin=claude ;;
+        codex)   title="Codex CLI";   bin=codex ;;
+        gemini)  title="Gemini CLI";  bin=gemini ;;
+        copilot) title="Copilot CLI"; bin=copilot ;;
+        aider)   title="Aider";       bin=aider ;;
+    esac
+    para=
+    f=$WS_KIT_RO/workspace-template/guide/BYO-HARNESS.md
+    if [ -r "$f" ]; then
+        para=$(awk -v t="**$title**" 'index($0, t) == 1 { on = 1 } on && /^[ \t]*$/ { exit } on { print }' "$f")
+    fi
+    say ""
+    say "${para:-(No notes for $title in guide/BYO-HARNESS.md; it reads AGENTS.md like the others.)}"
+    say ""
+    if bp=$(command -v "$bin" 2>/dev/null); then
+        record 10 byo OK "$title: $bin is on PATH ($bp); best effort, opencode is the supported harness"
+    else
+        record 10 byo WARN "$title: $bin is not on PATH" "install it under \$HOME before Oct 5 (see the notes above), or use opencode (hpc-gpt in the workspace)"
+    fi
+fi
+
+# Summary and reports.
+fails=() warns=()
+for i in "${!C_ID[@]}"; do
+    case ${C_ST[$i]} in FAIL) fails+=("${C_ID[$i]}") ;; WARN) warns+=("${C_ID[$i]}") ;; esac
+done
+finished=$(date -Iseconds)
+if [ "${#fails[@]}" -eq 0 ]; then overall=OK; else overall=FAIL; fi
+
+# json_list <items>...: a JSON array of strings.
+json_list() {
+    local s='' x
+    for x in "$@"; do s+="${s:+, }$(ws_json_str "$x")"; done
+    printf '[%s]' "$s"
+}
+# json_num <value>: a JSON number, or null. json_s <value>: a JSON string, or null when empty.
+json_num() { if [[ ${1:-} =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi; }
+json_s() { if [ -n "${1:-}" ]; then ws_json_str "$1" | tr -d '\n'; else printf 'null'; fi; }
+
+report() {
+    local i sep=''
+    printf '{\n'
+    printf '  "schema": "ws-preflight/1",\n'
+    printf '  "user": %s,\n' "$(json_s "$USER")"
+    printf '  "host": %s,\n' "$(json_s "$host")"
+    printf '  "login_node": %s,\n' "$(ws_is_login_node && echo true || echo false)"
+    printf '  "kit": %s,\n' "$(json_s "$WS_KIT_RO")"
+    printf '  "kit_version": %s,\n' "$(json_s "$kit_version")"
+    printf '  "started": %s,\n' "$(json_s "$started")"
+    printf '  "finished": %s,\n' "$(json_s "$finished")"
+    printf '  "status": %s,\n' "$(json_s "$overall")"
+    printf '  "fail": %s,\n' "$(json_list "${fails[@]}")"
+    printf '  "warn": %s,\n' "$(json_list "${warns[@]}")"
+    printf '  "byo": %s,\n' "$(json_s "$byo")"
+    printf '  "prewarm": {"outcome": %s, "seconds": %s, "started_before": %s, "key": %s, "key_mode": %s, "key_source": %s, "error": %s},\n' \
+        "$(json_s "$prewarm_outcome")" "$(json_num "$prewarm_seconds")" "$(json_s "$started_before")" \
+        "$(json_s "$key_used")" "$(json_s "$key_mode")" "$(json_s "$key_src")" "$(json_s "$prewarm_error")"
+    printf '  "acl_home": %s,\n' "$(json_s "$acl_home")"
+    printf '  "checks": [\n'
+    for i in "${!C_ID[@]}"; do
+        printf '%s    {"n": %s, "id": %s, "status": %s, "detail": %s, "fix": %s, "seconds": %s}' "$sep" \
+            "${C_N[$i]}" "$(json_s "${C_ID[$i]}")" "$(json_s "${C_ST[$i]}")" "$(json_s "${C_DETAIL[$i]}")" \
+            "$(json_s "${C_FIX[$i]}")" "$(json_num "${C_SEC[$i]}")"
+        sep=$',\n'
+    done
+    printf '\n  ]\n}\n'
+}
+
+# write_report <file> <mode>: write the report atomically (a tmp file in the same directory, then mv).
+write_report() {
+    local tmp
+    tmp=$(mktemp "$1.XXXXXX") || return 1
+    report > "$tmp" && chmod "$2" "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; return 1; }
+}
+
+write_report "$state/preflight.json" 600 || ws_warn "could not write $state/preflight.json"
+shared=0
+if [ -n "$WS_REPORTS" ] && [ -d "$WS_REPORTS" ] && [ -w "$WS_REPORTS" ]; then
+    if write_report "$WS_REPORTS/$USER.json" 640; then shared=1; fi
+fi
+
+say ""
+if [ "$shared" -eq 1 ]; then
+    say "[ws] report: $state/preflight.json and $WS_REPORTS/$USER.json (seen by the workshop staff)"
+else
+    if [ -n "$WS_REPORTS" ]; then why="$WS_REPORTS is not writable for you"; else why="WS_REPORTS is not set"; fi
+    say "[ws] report: $state/preflight.json (not shared: $why)"
+fi
+if [ "${#warns[@]}" -gt 0 ]; then say "[ws] warnings (fine to leave): ${warns[*]}"; fi
+if [ "$overall" = OK ]; then
+    say "PREFLIGHT OK"
+else
+    say "PREFLIGHT FAIL ($(IFS=,; printf '%s' "${fails[*]}"))"
+fi
+if [ "$json" -eq 1 ]; then report; fi
+[ "$overall" = OK ]

@@ -1,0 +1,77 @@
+# models.ws.yaml.in: the template run.sh renders into models.ws.yaml (@MODELS_DIR@ -> $WS_KIT_RO/models).
+# The entries are copies of Qwen2.5-1.5B-Instruct and Qwen2.5-7B-Instruct from LLMFlux 2.0.0's
+# templates/models.yaml with one change: hf_name is the pre-staged local snapshot, not the Hub id,
+# so vLLM loads from Lustre and nothing downloads (LLMFlux bind-mounts a local hf_name directory).
+# run.sh's --max-tokens, --temperature and --batch-size override the entries' values; the prompts
+# bring their own system message; stop_sequences apply as written (both use Qwen's end tokens; the
+# 7B's LLMFlux entry has '###', replaced so the two models stop the same way).
+# Use with: llmflux run --custom-config-path models.ws.yaml --engine vllm --model <key>
+models:
+  Qwen2.5-1.5B-Instruct-local:
+    hf_name: @MODELS_DIR@/Qwen2.5-1.5B-Instruct
+    name: qwen2.5:1.5b
+    parameters:
+      max_tokens: 2048
+      stop_sequences:
+      - <|endoftext|>
+      - <|im_end|>
+      temperature: 0.7
+      top_p: 0.9
+    requirements:
+      cpu_threads: 8
+      cuda_version: '>=11.8'
+      gpu_memory_utilization: 0.9
+      min_gpu_memory: 2GB
+      recommended_gpu: A100
+    resources:
+      batch_size: 1
+      gpu_layers: 1
+      gpu_memory: 2GB
+      max_concurrent: 1
+    system:
+      prompt: You are a helpful AI assistant.
+    validation:
+      batch_size_range:
+      - 1
+      - 32
+      concurrent_range:
+      - 1
+      - 8
+      max_tokens_limit: 8192
+      temperature_range:
+      - 0.0
+      - 1.0
+  Qwen2.5-7B-Instruct-local:
+    hf_name: @MODELS_DIR@/Qwen2.5-7B-Instruct
+    name: qwen2.5:7b
+    parameters:
+      max_tokens: 2048
+      stop_sequences:
+      - <|endoftext|>
+      - <|im_end|>
+      temperature: 0.7
+      top_p: 0.9
+    requirements:
+      cpu_threads: 4
+      cuda_version: '>=12.0'
+      gpu_memory_utilization: 0.9
+      min_gpu_memory: 16GB
+      recommended_gpu: A100
+    resources:
+      batch_size: 8
+      gpu_layers: 35
+      gpu_memory: 16GB
+      max_concurrent: 2
+    system:
+      prompt: You are Qwen, a large language model trained by Alibaba Cloud. You are direct and concise in your responses.
+    validation:
+      batch_size_range:
+      - 1
+      - 16
+      concurrent_range:
+      - 1
+      - 4
+      max_tokens_limit: 4096
+      temperature_range:
+      - 0.0
+      - 1.0

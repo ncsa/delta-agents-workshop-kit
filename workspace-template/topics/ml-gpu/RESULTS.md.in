@@ -1,0 +1,25 @@
+# Results: ml-gpu
+
+JOBID: <job id whose log holds every number below>
+
+## Evidence
+
+Copied exactly from the log of that job (`grep -E '^\[ws-env\]|^[A-Z_]+: |^RESULTS_OK' slurm-<id>.out`):
+
+- `[ws-env] host=<node> job=<id> gpu=<name> module=pytorch-conda/2.12`
+- THROUGHPUT: <samples/s>
+- ACCURACY: <test accuracy after the last epoch>
+- `RESULTS_OK`
+- plot: `ml-gpu.png`
+
+## What changed
+
+<The one change you made to train.py or job.sbatch (epochs, batch size, --amp, ...), or "none".>
+
+## How it was verified
+
+<The sacct line (State, Partition, Reservation, AllocTRES gres/gpu=1), the grep that found the numbers in the log, and the ws-check level.>
+
+## One limitation
+
+<What this run does not show, in one sentence (for example: one seed, one GPU, 2 epochs).>

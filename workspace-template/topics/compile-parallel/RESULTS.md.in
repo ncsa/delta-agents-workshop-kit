@@ -1,0 +1,26 @@
+# Results: compile-parallel
+
+JOBID: <job id whose log holds every number below>
+
+## Evidence
+
+Copied exactly from the log of that job (`grep -E '^\[ws-env\]|^[A-Z_0-9]+: |^RESULTS_OK' slurm-<id>.out`):
+
+- `[ws-env] host=<node> job=<id> gpu=none module=PrgEnv-gnu cc=<path>`
+- SPEEDUP_OMP16: <serial time / OpenMP time with 16 threads>
+- SPEEDUP_MPI16: <serial time / MPI time with 16 ranks>
+- RESULT_AGREE: <yes|no, from the log>
+- `RESULTS_OK`
+- plot: `scaling.png`
+
+## What changed
+
+<The one change you made to the sources, the Makefile or job.sbatch (N, flags, schedule, ...), or "none".>
+
+## How it was verified
+
+<The sacct line (State, Partition, Reservation, AllocTRES cpu=16), the grep that found the numbers in the log, and the ws-check level.>
+
+## One limitation
+
+<What this run does not show, in one sentence (for example: one node, one N, one run per thread count).>

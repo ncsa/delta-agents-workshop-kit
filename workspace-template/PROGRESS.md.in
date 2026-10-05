@@ -1,0 +1,25 @@
+# Workshop progress
+
+participant: @USER@
+date: @DATE@
+node: @NODE@
+harness: @HARNESS@
+topic:
+backend: @BACKEND@
+lumen key: @LUMEN_KEY@
+
+## Checkpoints
+
+- [ ] M0 launch
+- [ ] M1 orient
+- [ ] M2 plan
+- [ ] M3 env
+- [ ] M4 build
+- [ ] M5 run
+- [ ] M6 analyze
+- [ ] M7 open
+- [ ] M8 wrap
+
+## Jobs
+
+## Notes

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# ws-cancel: cancel a job, but only one submitted from this workspace (listed in .ws/jobs.tsv).
+# Design: staging/agents-workshop/design/kit.md §4. Dry run unless --yes.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-cancel [--yes] <jobid>
+
+Prints the scancel line for a job that ws-submit recorded in .ws/jobs.tsv; with --yes it runs
+it and records the cancellation. Any other job id is refused (exit 2): ask a helper.
+EOF
+}
+
+yes=0
+id=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --yes) yes=1 ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        -*) ws_err "unknown option: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+        *)
+            if [ -n "$id" ]; then ws_err "one job id only"; exit "$WS_E_USAGE"; fi
+            id=$1 ;;
+    esac
+    shift
+done
+if ! [[ $id =~ ^[0-9]+(_[0-9]+)?$ ]]; then usage >&2; exit "$WS_E_USAGE"; fi
+
+ws_load_env
+ws=$(ws_find_workspace) || ws_die "$WS_E_ENV" "no workspace found: cd into your workspace (or set WS_HOME) and retry"
+row=$(ws_job_row "$ws" "$id") || ws_die "$WS_E_POLICY" "job $id was not submitted from this workspace; ask a helper"
+script=$(printf '%s\n' "$row" | cut -f3)
+topic=$(printf '%s\n' "$row" | cut -f4)
+
+ws_info "scancel $id"
+if [ "$yes" -eq 0 ]; then
+    echo "DRY RUN: nothing cancelled. Rerun with --yes; the harness asks the participant."
+    exit "$WS_E_OK"
+fi
+ws_require_cmd scancel || exit "$WS_E_ENV"
+rc=0
+out=$(scancel "$id" 2>&1) || rc=$?
+if [ -n "$out" ]; then printf '%s\n' "$out"; fi
+if [ "$rc" -ne 0 ]; then ws_die "$WS_E_SLURM" "scancel $id failed (exit $rc)"; fi
+
+hm=$(ws_now_hm)
+printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$hm" "$script" "${topic:-none}" cancelled >> "$ws/.ws/jobs.tsv"
+if ! ws_progress_add_job "$ws/PROGRESS.md" "- $id $script cancelled $hm"; then
+    ws_warn "could not add the cancellation to PROGRESS.md; it is recorded in .ws/jobs.tsv"
+fi
+ws_info "cancelled job $id (recorded in .ws/jobs.tsv and PROGRESS.md)"

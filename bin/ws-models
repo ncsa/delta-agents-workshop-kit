@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# ws-models: which Lumen models answer with this workspace's key. Read-only probe: one short
+# `opencode run -m lumen/<id>` per model from the workspace, so the rendered key applies. It never
+# prints a key. Design: C16 (only models that answer); ops/README.md "Vetting the Lumen models".
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-models [--all] [--json]
+
+Asks each model in WS_LUMEN_MODELS (the models this workspace offers) for one word, with
+this workspace's Lumen key, 60 s each, and prints one line per model:
+  ok          it answered
+  no-access   "No access to this model": this key cannot use it
+  not-found   Lumen no longer has it: the kit's list is stale
+  auth        the key was rejected (401 or an invalid key)
+  timeout     no answer within 60 s
+  error: ...  anything else (the first error line)
+
+  --all    also every Lumen model the site config (hpc-gpt) lists
+  --json   print the result as JSON
+
+Exit 0 when the default model (WS_MODEL_DEFAULT) answers, 1 otherwise, 3 without a workspace.
+EOF
+}
+
+all=0
+json=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        --all) all=1 ;;
+        --json) json=1 ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        *) ws_err "unknown argument: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+    esac
+    shift
+done
+
+ws_load_env
+ws=$(ws_find_workspace || true)
+if [ -z "$ws" ] && [ -e "$HOME/ws-$WS_DATE/.ws-workspace" ]; then ws=$HOME/ws-$WS_DATE; fi
+if [ -z "$ws" ] || [ ! -f "$ws/opencode.json" ]; then
+    ws_die "$WS_E_ENV" "no workspace with an opencode.json found: cd into your workspace (run ws-init first)"
+fi
+tmo=${WS_MODELS_TIMEOUT:-60}
+
+# say <line>: human-readable output, on stderr under --json (stdout then carries only JSON).
+say() { if [ "$json" -eq 1 ]; then printf '%s\n' "$*" >&2; else printf '%s\n' "$*"; fi; }
+
+# The key: ws-init's resolution (the saved choice, else WS_LUMEN_KEY, else auto); when that key cannot
+# be used, the one PROGRESS.md says opencode.json was rendered with, else site. A rendered key that
+# differs (a key file added since, or an opencode.json with own edits) is named: ws-init applies it.
+key_choice=$(ws_lumen_key_choice "$ws")
+key_src=${key_choice#* }
+if ! key_mode=$(ws_lumen_key_mode "${key_choice%% *}" 2>/dev/null); then
+    key_mode=$(ws_progress_field "$ws/PROGRESS.md" "lumen key")
+    case $key_mode in site|personal|workshop) key_src=rendered ;; *) key_mode=site key_src=fallback ;; esac
+fi
+key_rendered=$(ws_progress_field "$ws/PROGRESS.md" "lumen key")
+
+# opencode from the hpc-gpt module: already on PATH after env.sh, else loaded for each call.
+pre=()
+if ! command -v opencode >/dev/null 2>&1; then pre=(ws_with_hpcgpt); fi
+export OPENCODE_DISABLE_FILEWATCHER=1 OPENCODE_DISABLE_AUTOUPDATE=1
+
+# site_ids: the Lumen model ids the site config lists (provider.lumen.models), one per line.
+site_ids() {
+    local cfg=${WS_SITE_OPENCODE_CONFIG:-${OPENCODE_CONFIG:-/sw/external/opencode/delta-opencode.jsonc}}
+    [ -r "$cfg" ] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - "$cfg" <<'PY'
+import json, re, sys
+t = open(sys.argv[1]).read()
+out, i, n = [], 0, len(t)
+while i < n:                                   # drop // and /* */ comments outside strings
+    c = t[i]
+    if c == '"':
+        j = i + 1
+        while j < n and t[j] != '"':
+            j += 2 if t[j] == "\\" else 1
+        out.append(t[i:j + 1]); i = j + 1
+    elif t.startswith("//", i):
+        while i < n and t[i] != "\n":
+            i += 1
+    elif t.startswith("/*", i):
+        i = t.index("*/", i + 2) + 2
+    else:
+        out.append(c); i += 1
+cfg = json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+for k in ((cfg.get("provider") or {}).get("lumen") or {}).get("models") or {}:
+    print(k)
+PY
+}
+
+ids=()
+for m in $WS_LUMEN_MODELS; do ids+=("$m"); done
+extra=()
+if [ "$all" -eq 1 ]; then
+    if listed=$(site_ids); then
+        while IFS= read -r m; do
+            case $m in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+            if ! ws_lumen_listed "$m"; then extra+=("$m"); fi
+        done <<<"$listed"
+    else
+        ws_warn "could not read the site's opencode config (OPENCODE_CONFIG); probing WS_LUMEN_MODELS only"
+    fi
+fi
+
+# The models outside WS_LUMEN_MODELS are not in the workspace's whitelist, so opencode there would
+# not know them: they are probed from a scratch directory whose opencode.json has the same Lumen
+# options (the same key) and a whitelist of exactly those ids.
+scratch=
+cleanup() { if [ -n "$scratch" ]; then rm -rf -- "$scratch"; fi; }
+trap cleanup EXIT
+if [ "${#extra[@]}" -gt 0 ]; then
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/ws-models.XXXXXX")
+    {
+        printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "autoupdate": false,\n  "share": "disabled",\n'
+        printf '  "enabled_providers": ["lumen"],\n  "disabled_providers": ["ncsahosted"],\n  "provider": {\n    "lumen": {\n'
+        printf '      "npm": "@ai-sdk/openai-compatible",\n      "options": { %s },\n' "$(ws_lumen_options_json "$key_mode")"
+        printf '      "whitelist": [%s],\n      "models": {\n' "$(ws_lumen_whitelist_json "${extra[@]}")"
+        ws_lumen_models_json '        ' "${extra[@]}"
+        printf '      }\n    }\n  }\n}\n'
+    } > "$scratch/opencode.json"
+fi
+
+# probe <id> <dir>: one call; sets p_outcome and p_seconds.
+probe() {
+    local t0 rc=0 out err
+    out=$(mktemp "${TMPDIR:-/tmp}/ws-models.out.XXXXXX")
+    err=$(mktemp "${TMPDIR:-/tmp}/ws-models.err.XXXXXX")
+    t0=$(date +%s)
+    ( cd "$2" && "${pre[@]}" timeout -k 5 "$tmo" opencode run -m "lumen/$1" "Reply with exactly: OK" ) \
+        < /dev/null > "$out" 2> "$err" || rc=$?
+    p_seconds=$(( $(date +%s) - t0 ))
+    p_outcome=$(ws_probe_classify "$rc" "$out" "$err" OK)
+    rm -f -- "$out" "$err"
+}
+
+say "[ws] lumen key: $(ws_lumen_describe "$key_mode"); source: $key_src"
+case $key_rendered in
+    site|personal|workshop)
+        if [ "$key_rendered" != "$key_mode" ]; then
+            ws_warn "opencode.json was rendered with the $key_rendered key (PROGRESS.md); run ws-init to use $key_mode"
+        fi ;;
+esac
+say "[ws] probing ${#ids[@]} workshop model(s)${extra[*]:+ and ${#extra[@]} more from the site list}, up to $tmo s each"
+rows=()
+default_ok=0
+for m in "${ids[@]}" "${extra[@]}"; do
+    if ws_lumen_listed "$m"; then dir=$ws; where=workshop; else dir=$scratch; where=site-only; fi
+    probe "$m" "$dir"
+    tag=
+    if [ "$m" = "$WS_MODEL_DEFAULT" ]; then tag=" (default)"; fi
+    if [ "$where" = site-only ]; then tag+=" (site list only)"; fi
+    say "$(printf '[ws] %-34s %s%s' "lumen/$m" "$p_outcome" "$([ "$p_outcome" = ok ] && printf ' (%s s)' "$p_seconds")")$tag"
+    if [ "$m" = "$WS_MODEL_DEFAULT" ] && [ "$p_outcome" = ok ]; then default_ok=1; fi
+    rows+=("{\"id\":$(ws_json_str "$m"),\"listed\":$([ "$where" = workshop ] && echo true || echo false),\"outcome\":$(ws_json_str "$p_outcome"),\"seconds\":$p_seconds}")
+done
+if [ "$default_ok" -eq 1 ]; then
+    say "[ws] the default model lumen/$WS_MODEL_DEFAULT answers"
+else
+    say "[ws] the default model lumen/$WS_MODEL_DEFAULT does not answer: switch with /models, or ask a helper"
+fi
+if [ "$json" -eq 1 ]; then
+    body=$(IFS=,; printf '%s' "${rows[*]}")
+    printf '{"workspace":%s,"key":%s,"key_source":%s,"default":%s,"default_ok":%s,"models":[%s]}\n' "$(ws_json_str "$ws")" \
+        "$(ws_json_str "$key_mode")" "$(ws_json_str "$key_src")" "$(ws_json_str "$WS_MODEL_DEFAULT")" \
+        "$([ "$default_ok" -eq 1 ] && echo true || echo false)" "$body"
+fi
+[ "$default_ok" -eq 1 ]

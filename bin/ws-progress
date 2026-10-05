@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# ws-progress: record a module checkpoint, a note or a header field in PROGRESS.md.
+# Design: staging/agents-workshop/design/kit.md §4.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-progress <M0..M8> "<note>"
+       ws-progress --note "<text>"
+       ws-progress --set <topic|backend|harness|"lumen key"> <value>
+
+The first form marks a module done under "## Checkpoints":
+  - [x] <HH:MM> <module> — <note>
+replacing the "- [ ] <module> ..." placeholder; a module already checked gets the new line
+right after its last checkpoint; otherwise it is appended. M8 more than 5 minutes before
+WS_M8 is recorded with a note that M7 had time left.
+The second form appends "- <HH:MM> <text>" under "## Notes".
+The third form sets a header field ("topic: ml-gpu") at the top of PROGRESS.md.
+The first two print the line as PROGRESS.md now holds it, read back from the file.
+Job ids need no call: ws-submit records them under "## Jobs".
+EOF
+}
+
+M8_EARLY_MIN=5   # minutes before WS_M8 from which an M8 checkpoint is not early
+
+case ${1:-} in -h|--help) usage; exit "$WS_E_OK" ;; esac
+
+ws_load_env
+ws=$(ws_find_workspace) || ws_die "$WS_E_ENV" "no workspace found: cd into your workspace (or set WS_HOME) and retry"
+prog=$ws/PROGRESS.md
+[ -f "$prog" ] || ws_die "$WS_E_ENV" "no PROGRESS.md in $ws (run ws-init)"
+
+# write_back <tmpfile>: replace PROGRESS.md's content in place (keeps its mode and inode).
+write_back() {
+    cat "$1" > "$prog"
+    rm -f "$1"
+}
+
+# show_written <prefix> <line>: print the line as PROGRESS.md now holds it, read back from the file
+# (C22, KF12: an agent claimed "Checkpoint recorded" with no line written; the tool output is the
+# proof), or fail when it is not there.
+show_written() {
+    if grep -qxF -- "$2" "$prog"; then
+        ws_info "$1$2"
+    else
+        ws_die "$WS_E_ENV" "the line is not in $prog after writing it (a concurrent edit?); run ws-progress again"
+    fi
+}
+
+if [ "${1:-}" = --set ]; then
+    if [ $# -ne 3 ]; then usage >&2; exit "$WS_E_USAGE"; fi
+    field=$2
+    value=${3//$'\n'/ }
+    case $field in
+        topic|backend|harness|"lumen key") ;;
+        *) ws_err "unknown field '$field' (use topic, backend, harness or 'lumen key')"; exit "$WS_E_USAGE" ;;
+    esac
+    tmp=$(mktemp "$prog.XXXXXX")
+    WS_K=$field WS_V=$value awk '
+        BEGIN { k = ENVIRON["WS_K"]; v = ENVIRON["WS_V"]; line = k ": " v; if (v == "") line = k ":" }
+        !done && /^## / { print line; print ""; done = 1 }
+        !done && index($0, k ":") == 1 { print line; done = 1; next }
+        { print }
+        END { if (!done) print line }' "$prog" > "$tmp"
+    write_back "$tmp"
+    ws_info "PROGRESS.md: $field: $value"
+    exit "$WS_E_OK"
+fi
+
+# --note: a note for "## Notes" (created at the end when missing), so the agent never edits
+# PROGRESS.md by hand (AGENTS.md rule 10).
+if [ "${1:-}" = --note ]; then
+    if [ $# -ne 2 ]; then usage >&2; exit "$WS_E_USAGE"; fi
+    text=${2//$'\n'/ }
+    if [ -z "${text//[[:space:]]/}" ]; then ws_err "the note is empty"; exit "$WS_E_USAGE"; fi
+    line="- $(ws_now_hm) $text"
+    tmp=$(mktemp "$prog.XXXXXX")
+    WS_L=$line awk '
+        function flush() { while (blank > 0) { print ""; blank-- } }
+        BEGIN { line = ENVIRON["WS_L"] }
+        /^## / {
+            if (in_notes && !done) { print line; done = 1 }
+            flush()
+            in_notes = ($0 ~ /^## Notes[ \t]*$/); seen = seen || in_notes
+            print; next
+        }
+        in_notes && /^[ \t]*$/ { blank++; next }
+        { flush(); print }
+        END {
+            if (in_notes && !done) { print line; done = 1 }
+            flush()
+            if (!seen) { print ""; print "## Notes"; print line }
+        }' "$prog" > "$tmp"
+    write_back "$tmp"
+    show_written "PROGRESS.md (## Notes): " "$line"
+    exit "$WS_E_OK"
+fi
+
+if [ $# -ne 2 ]; then usage >&2; exit "$WS_E_USAGE"; fi
+module=$1
+note=${2//$'\n'/ }
+if ! ws_is_module "$module"; then
+    ws_err "unknown module '$module' (use M0..M8: ${WS_MODULES[*]})"
+    exit "$WS_E_USAGE"
+fi
+if [ -z "$note" ]; then ws_err "the note is empty; say what was done and the evidence"; exit "$WS_E_USAGE"; fi
+
+hm=$(ws_now_hm)
+line="- [x] $hm $module — $note"
+tmp=$(mktemp "$prog.XXXXXX")
+# Where the line goes: right after the module's last "- [x]" line when it is already checked (a
+# repeated checkpoint stays with its module: M7, M7, M8, not M7, M8, M7); else in place of its
+# "- [ ]" placeholder; else at the end of the section. Two passes: the first finds that last line.
+WS_M=$module WS_L=$line awk '
+    function flush() { while (blank > 0) { print ""; blank-- } }
+    BEGIN { m = ENVIRON["WS_M"]; line = ENVIRON["WS_L"]
+            pat = "^- \\[ \\] " m "([ \t]|$)"; xpat = "^- \\[[xX]\\] ([0-9]+:[0-9][0-9] )?" m "([ \t]|$)" }
+    FNR == 1 { pass++; in_cp = 0 }
+    pass == 1 {
+        if (/^## /) in_cp = ($0 ~ /^## Checkpoints[ \t]*$/)
+        else if (in_cp && $0 ~ xpat) last = FNR
+        next
+    }
+    /^## / {
+        if (in_cp && !done) { print line; done = 1 }
+        flush()
+        in_cp = ($0 ~ /^## Checkpoints[ \t]*$/); seen = seen || in_cp
+        print; next
+    }
+    in_cp && /^[ \t]*$/ { blank++; next }
+    in_cp && !done && last && FNR == last { flush(); print; print line; done = 1; next }
+    in_cp && !done && !last && $0 ~ pat { flush(); print line; done = 1; next }
+    { flush(); print }
+    END {
+        if (in_cp && !done) { print line; done = 1 }
+        flush()
+        if (!seen) { print ""; print "## Checkpoints"; print line }
+    }' "$prog" "$prog" > "$tmp"
+write_back "$tmp"
+show_written "PROGRESS.md: " "$line"
+# M8 well before its time box: the wrap came early (all six C20 rehearsals closed M7 early).
+if [ "$module" = M8 ]; then
+    early=$(( $(ws_hm_to_min "$WS_M8") - $(ws_hm_to_min "$hm") ))
+    if [ "$early" -gt "$M8_EARLY_MIN" ]; then
+        ws_info "note: M8 recorded $early min before $WS_M8; M7 had time left"
+    fi
+fi

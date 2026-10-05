@@ -1,0 +1,171 @@
+// opencode.json for the workshop workspace (JSONC). ws-init renders the at-sign placeholders.
+// Merges over the site config (OPENCODE_CONFIG=/sw/external/opencode/delta-opencode.jsonc):
+// objects deep-merge and this file wins on conflicts. Design: kit.md §5, open-models.md §1.6.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "share": "disabled",
+  // Plain `hpc-gpt` or `opencode` in this directory starts the workshop agent (over the site's "support").
+  "default_agent": "workshop",
+  "model": "lumen/@MODEL_DEFAULT@",
+  // Session titles and summaries (WS_SMALL_MODEL): keep it on the backend in use.
+  "small_model": "lumen/@SMALL_MODEL@",
+  // Restated in full; the site list is ["ncsahosted","lumen"]. ncsahosted is off: its hosted
+  // endpoint drops long sessions. Lumen is the site provider, with the key WS_LUMEN_KEY picks.
+  "enabled_providers": ["lumen", "standby"],
+  "disabled_providers": ["ncsahosted"],
+  "agent": {
+    "build":    { "disable": true },
+    "plan":     { "disable": true },
+    // Site modes (legacy "mode" key); the gate checks that `opencode agent list` shows only workshop.
+    "support":  { "disable": true },
+    "debug":    { "disable": true },
+    "learning": { "disable": true },
+    // C22 (KF12): opencode's native compaction agent takes this prompt (its own 1.18.23 text plus rule
+    // 12: Next Move re-reads PROGRESS.md and PLAN.md and runs ws-status first). The summary's Markdown
+    // template comes with each compaction request and is unchanged.
+    "compaction": { "prompt": "{file:./.opencode/prompts/compaction.txt}" },
+    "workshop": {
+      "description": "Workshop guide and collaborator (default)",
+      "mode": "primary",
+      "model": "lumen/@MODEL_DEFAULT@",
+      "prompt": "{file:./.opencode/prompts/workshop.txt}",
+      "steps": 30,
+      "tools": {
+        "report-server_*": false,
+        "knowledge-base-server_*": true,
+        "illinois-chat-server_*": true,
+        "slurm-mcp-server_*": true
+      },
+      "permission": {
+        "read": "allow", "glob": "allow", "grep": "allow", "list": "allow", "lsp": "allow",
+        "edit": "ask",
+        "question": "allow", "todowrite": "allow",
+        "task": "deny", "skill": "deny",            // no subagents; no ~/.claude/skills leakage
+        "webfetch": "ask", "websearch": "deny",
+        "external_directory": "ask", "doom_loop": "ask",
+        // Last match wins: each group below may override the groups above it, never the reverse.
+        "bash": {
+          "*": "ask",
+          // consequential: ask (first, so the narrower allows and the denies below override them)
+          "pip install*": "ask", "*pip install*": "ask", "conda install*": "ask", "conda create*": "ask",
+          "chmod *": "ask", "setfacl *": "ask", "python *": "ask", "python3 *": "ask",
+          // M7: the open-ended venv, only inside the workspace (AGENTS.md rule 17)
+          "python -m venv*": "ask", "python3 -m venv*": "ask", "*-m venv *": "ask",
+          "make*": "ask", "rm *": "ask", "*curl*": "ask", "*wget*": "ask",
+          // read-only inspection
+          "pwd": "allow", "ls": "allow", "ls *": "allow", "cat *": "allow", "head *": "allow", "tail *": "allow",
+          "wc *": "allow", "find *": "allow", "grep *": "allow", "rg *": "allow", "file *": "allow", "stat *": "allow",
+          "du *": "allow", "df *": "allow", "which *": "allow", "type *": "allow", "echo *": "allow", "printf *": "allow",
+          "date*": "allow", "hostname*": "allow", "whoami": "allow", "id": "allow", "id *": "allow", "nproc*": "allow",
+          "free*": "allow", "uptime": "allow", "nvidia-smi*": "allow",
+          "getfacl *": "allow", "lfs quota *": "allow", "diff *": "allow", "md5sum *": "allow", "sha256sum *": "allow",
+          "bash -n *": "allow", "python -m py_compile *": "allow", "python3 -m py_compile *": "allow", "make -n*": "allow",
+          // Slurm, read-only, and site tools
+          "accounts*": "allow", "quota*": "allow", "sinfo*": "allow", "squeue*": "allow", "sacct*": "allow",
+          "scontrol show *": "allow", "seff *": "allow", "sprio*": "allow",
+          "module avail*": "allow", "module list*": "allow", "module show*": "allow", "module spider*": "allow",
+          "llmflux show-models*": "allow", "llmflux jobs*": "allow", "llmflux status *": "allow", "llmflux logs *": "allow",
+          // git
+          "git status*": "allow", "git diff*": "allow", "git log*": "allow", "git add *": "allow", "git commit*": "ask",
+          // kit helpers (ws-submit without --yes is a dry run; with --yes the participant decides)
+          "ws-status*": "allow", "ws-check*": "allow", "ws-wait *": "allow", "ws-log *": "allow", "ws-progress *": "allow",
+          "ws-standby*": "allow", "ws-standby on*": "ask", "ws-standby off*": "ask", "ws-models*": "allow",
+          "ws-submit *": "allow", "ws-submit*--yes*": "ask", "ws-cancel *": "allow", "ws-cancel*--yes*": "ask",
+          "ws-init*": "ask",
+          // the llm-batch dry run, exactly: any argument (--yes too) stays ask under "*"
+          "bash topics/llm-batch/run.sh": "allow",
+          // Writes through the shell: opencode checks each command node, or the redirected_statement
+          // around it, on its own, so without these "echo x > f" is an allowed echo; a pipe's
+          // receiving command is checked by itself. After every allow above, before the denies below.
+          "* > *": "ask", "* >> *": "ask", "*>|*": "ask", "* &> *": "ask", "* 1> *": "ask", "*<<*": "ask",
+          // home dot-files and dot-directories, however the path is spelled (the denies below win)
+          "*~/.*": "ask", "*$HOME/.*": "ask", "*${HOME}/.*": "ask",
+          // denied outright, after the allows so they win (last match wins)
+          "git push*": "deny",
+          "sbatch *": "deny", "sbatch --test-only *": "allow",
+          "salloc*": "deny", "srun*": "deny", "scancel*": "deny",
+          "llmflux run*": "deny", "llmflux serve*": "deny", "llmflux cancel*": "deny",
+          "*rm -r*": "deny", "*rm -f*": "deny", "*rm -rf*": "deny", "find *-exec*": "ask", "find *-delete*": "deny",
+          "*~/.bashrc*": "deny", "*~/.bash_profile*": "deny", "*~/.profile*": "deny", "*~/.ssh*": "deny",
+          "*/.ssh/*": "deny", "*~/.config/*": "deny", "*~/.local/share/opencode*": "deny",
+          // dot-files by path, whatever comes before the slash ($HOME, /u/<netid>, ~). Not "*.profile*":
+          // that would hit torch.profiler.
+          "*/.bashrc*": "deny", "*/.bash_profile*": "deny", "*/.bash_aliases*": "deny", "*/.profile*": "deny",
+          "*/.netrc*": "deny", "*/.aws/*": "deny", "*/.local/share/opencode*": "deny",
+          // key files: the rendered paths and every other spelling of them
+          "*@LUMEN_KEY_FILE@*": "deny", "*@STANDBY_DIR@/key*": "deny", "*/path/to/site-lumen-key*": "deny",
+          "*/keys/*": "deny", "*lumen-ws.key*": "deny", "*/standby/key*": "deny", "*WS_LUMEN_KEY_FILE*": "deny",
+          "*/.config/lumen/*": "deny",
+          "*STANDBY_DIR*/key*": "deny", "*huggingface/token*": "deny",
+          // environment dumps: the environment may hold tokens (HF_TOKEN, ...) and a headless run would
+          // approve an "ask" (C17 gate, Sep 29); read workshop settings with ws-status or echo $WS_NAME
+          "printenv": "deny", "printenv *": "deny", "env": "deny", "env *": "deny", "export -p*": "deny",
+          "declare -x*": "deny", "declare -p*": "deny", "*/proc/*/environ*": "deny",
+          // the forced account, partition, reservation and caps are not set on a command line
+          "*WS_ACCOUNT_*=*": "deny", "*WS_PART_*=*": "deny", "*WS_RES_*=*": "deny", "*WS_*_MAX=*": "deny",
+          // a download piped into a shell: the receiving command, checked on its own
+          "sh": "deny", "sh -": "deny", "sh -s*": "deny", "bash": "deny", "bash -": "deny", "bash -s*": "deny",
+          "python": "deny", "python3": "deny", "python -": "deny", "python3 -": "deny",
+          // recursive deletes and history rewrites: accidental loss of the participant's work
+          "*rm -R*": "deny", "*rm -*r*": "deny", "*--recursive*": "deny",
+          "git clean*": "deny", "git reset --hard*": "deny",
+          "sudo *": "deny", "su *": "deny", "ssh *": "deny", "scp *": "deny",
+          "*opencode*--auto*": "deny", "*hpc-gpt*--auto*": "deny"
+        }
+      }
+    }
+  },
+  "provider": {
+    // The site provider: merges over the site's "lumen" entry. ws-init drops the apiKey member for
+    // WS_LUMEN_KEY site (the site config's key applies) and renders {file:} for personal or workshop.
+    // The placeholders sit inside strings so this template stays valid JSONC (the dry run reads it).
+    "lumen": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NCSA Lumen",
+      "options": { "baseURL": "https://lumen.ncsa.illinois.edu/v1", "apiKey": "@LUMEN_API_KEY@" },
+      // Only the vetted models (WS_LUMEN_MODELS): the site list still names models Lumen removed.
+      "whitelist": ["@LUMEN_WHITELIST@"],
+      // Caps from the kit's lib/lumen-models.tsv; limit.context caps each session.
+      "models": {
+        "@LUMEN_MODELS@": {}
+      }
+    },
+    "standby": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Workshop standby",
+      // Both files always exist (the lead writes them); opencode reads them once at startup.
+      "options": { "baseURL": "{file:@STANDBY_DIR@/endpoint}", "apiKey": "{file:@STANDBY_DIR@/key}" },
+      "models": {
+        // Neutral id: opencode echoes reasoning_content for ids containing "deepseek".
+        "ws-model": {
+          "name": "Workshop standby",
+          "limit": { "context": 131072, "output": 16384 },
+          "headers": { "x-litellm-session-id": "{env:USER}" }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "report-server": { "enabled": false }
+  },
+  "command": {
+    // The site command names agent "support" (switched off here) and a lumen/* model.
+    "report": {
+      "template": "Reporting to Jira is disabled in the workshop. Tell the participant in two lines: helpers walk the room, so stop one as they pass; meanwhile they can ask you here, and you explain the error or the step. Change no file.",
+      "description": "Disabled in the workshop",
+      "agent": "workshop",
+      "model": "lumen/@MODEL_DEFAULT@"
+    },
+    // The built-in /init rewrites AGENTS.md of the folder it runs in: here that is the workshop's
+    // house rules. Participants use it in their own project folders (ON-YOUR-OWN.md, step 3 of the bootstrap).
+    "init": {
+      "template": "Do not run /init in this workspace: /init would overwrite the workshop's AGENTS.md here. Tell the participant in two lines, then point to ON-YOUR-OWN.md: /init belongs in their own project folder, where it drafts an AGENTS.md from the code; the guide's starter AGENTS.md adds what /init cannot know (the caps, the submit command, the evidence lines). Change no file.",
+      "description": "Disabled here: use /init in your own project folder (ON-YOUR-OWN.md)",
+      "agent": "workshop",
+      "model": "lumen/@MODEL_DEFAULT@"
+    }
+  },
+  "compaction": { "auto": true, "prune": true },
+  "watcher": { "ignore": ["**/data/**", "**/.vllm/**", "**/.cache/**", "**/logs/**", "**/*.out", "**/results/**", "**/.venv/**"] }
+}

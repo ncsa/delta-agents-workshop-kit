@@ -1,0 +1,103 @@
+Lmod Warning:
+'cray-mpich' requires a network targeting module to be loaded.
+Try 'module avail craype-network' to list the available network
+ targeting modules. 
+While processing the following module(s):
+    Module fullname   Module Filename
+    ---------------   ---------------
+    PrgEnv-gnu/8.7.0  /opt/cray/pe/lmod/modulefiles/core/PrgEnv-gnu/8.7.0.lua
+    default-rh96      /sw/rh9.4/user/modules/default-rh96.lua
+
+Running "module reset". Resetting modules to system default. The following $MODULEPATH directories have been removed: /sw/rh9.4/spack/default/modules/lmod/linux-rhel9-x86_64/Core /opt/cray/pe/lmod/modulefiles/mpi/gnu/10.0/ofi/1.0/cray-mpich/8.0
+PyTorch 2.12.1 for Delta — RH9.6 / CPE 26.3 (CUDA 13.0, Python 3.12)
+
+Built for the RH9.6 stack: cu130 wheels (CUDA 13.0 runtime), mpi4py linked
+against cray-mpich 9.1.0, system libfabric 2.3.1 (Slingshot CXI). Runs on
+driver 595.71.05 natively. Refuses to load on RH9.4 nodes — use
+pytorch-conda/2.8 there.
+
+For documentation and examples:
+  https://docs.ncsa.illinois.edu/systems/delta/
+
+Run setup-kernel prior to launching an OOD job.
+
+Quick start (on a RH9.6 compute node):
+  module load pytorch-conda/2.12
+  conda activate base
+  python -c "import torch; print(torch.cuda.is_available())"
+
+CUDA extensions: CUDA_HOME comes from the default cudatoolkit module
+(cudatoolkit/default -> 26.5_13.2 on RH9.6, nvcc 13.2).
+
+Multi-node NCCL: the aws-ofi-nccl plugin is loaded automatically, so NCCL
+routes over Slingshot CXI rather than falling back to TCP sockets.
+
+aws-ofi-nccl/1.19.2 (RH9.6/CPE 26.3: libfabric 2.3.1, CUDA 13.2)
+[ws-env] host=gpub002.delta.ncsa.illinois.edu job=22466011 gpu=NVIDIA A40 module=pytorch-conda/2.12
+[pinn] host=gpub002.delta.ncsa.illinois.edu device=cuda gpu=NVIDIA A40 torch=2.12.1+cu130 steps=8000 lbfgs=0 n_colloc=2000 alpha=0.05 seed=1234
+/sw/rh9.4/user/python/conda-env/pytorch-2.12.1-cu130/lib/python3.12/site-packages/torch/autograd/graph.py:882: UserWarning: Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context... (Triggered internally at /pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:370.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+STEP 0 loss 4.620097e-01
+STEP 500 loss 8.724991e-04
+STEP 1000 loss 2.395767e-04
+STEP 1500 loss 4.994428e-05
+STEP 2000 loss 3.295993e-05
+STEP 2500 loss 3.140847e-05
+STEP 3000 loss 4.458727e-04
+STEP 3500 loss 2.840683e-05
+STEP 4000 loss 2.882802e-05
+STEP 4500 loss 2.577915e-05
+STEP 5000 loss 2.519505e-05
+STEP 5500 loss 6.023350e-05
+STEP 6000 loss 2.217454e-05
+STEP 6500 loss 3.734415e-05
+STEP 7000 loss 1.856515e-05
+STEP 7500 loss 2.323494e-05
+STEP 8000 loss 1.493806e-05
+PROFILE 0.25 0.000 -0.000035
+PROFILE 0.25 0.050 0.138414
+PROFILE 0.25 0.100 0.273380
+PROFILE 0.25 0.150 0.401530
+PROFILE 0.25 0.200 0.519736
+PROFILE 0.25 0.250 0.625143
+PROFILE 0.25 0.300 0.715201
+PROFILE 0.25 0.350 0.787699
+PROFILE 0.25 0.400 0.840822
+PROFILE 0.25 0.450 0.873217
+PROFILE 0.25 0.500 0.884055
+PROFILE 0.25 0.550 0.873072
+PROFILE 0.25 0.600 0.840564
+PROFILE 0.25 0.650 0.787371
+PROFILE 0.25 0.700 0.714835
+PROFILE 0.25 0.750 0.624766
+PROFILE 0.25 0.800 0.519399
+PROFILE 0.25 0.850 0.401330
+PROFILE 0.25 0.900 0.273431
+PROFILE 0.25 0.950 0.138727
+PROFILE 0.25 1.000 0.000252
+PROFILE 0.50 0.000 -0.000521
+PROFILE 0.50 0.050 0.122017
+PROFILE 0.50 0.100 0.241331
+PROFILE 0.50 0.150 0.354586
+PROFILE 0.50 0.200 0.459064
+PROFILE 0.50 0.250 0.552254
+PROFILE 0.50 0.300 0.631905
+PROFILE 0.50 0.350 0.696066
+PROFILE 0.50 0.400 0.743137
+PROFILE 0.50 0.450 0.771912
+PROFILE 0.50 0.500 0.781631
+PROFILE 0.50 0.550 0.772020
+PROFILE 0.50 0.600 0.743309
+PROFILE 0.50 0.650 0.696229
+PROFILE 0.50 0.700 0.631975
+PROFILE 0.50 0.750 0.552172
+PROFILE 0.50 0.800 0.458799
+PROFILE 0.50 0.850 0.354121
+PROFILE 0.50 0.900 0.240583
+PROFILE 0.50 0.950 0.120712
+PROFILE 0.50 1.000 -0.003002
+FINAL_LOSS: 1.493806e-05
+L2_ERROR: 7.5549e-04
+PDE_RESIDUAL: 3.6775e-03
+TRAIN_SECONDS: 46.66
+RESULTS_OK

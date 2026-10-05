@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# ws-agent: optional shortcut. Participants start the harness itself in the workspace (cd there,
+# then hpc-gpt, opencode, claude, ...); ws-agent does the same for opencode: cd, then exec hpc-gpt
+# (the workspace's opencode.json makes "workshop" the default agent). With a bring-your-own flag,
+# it prints how to start that harness instead.
+# Design: staging/agents-workshop/design/kit.md §4 and §6.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-agent [--claude|--codex|--gemini|--copilot|--aider]
+
+Optional shortcut. The usual way: cd into your workspace and run hpc-gpt (or
+opencode, claude, codex, gemini: see guide/BYO-HARNESS.md), then type: start
+
+Without a flag: loads hpc-gpt, changes to your workspace and starts hpc-gpt there
+(compute node only); the workshop agent is the default. Then type: start
+
+With a flag: prints the launch line and the caveats for that harness (best effort;
+the supported harness is opencode) and exits without starting anything.
+EOF
+}
+
+byo=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --claude|--codex|--gemini|--copilot|--aider)
+            if [ -n "$byo" ]; then ws_err "give at most one harness flag"; usage >&2; exit "$WS_E_USAGE"; fi
+            byo=${1#--} ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        *) ws_err "unknown argument: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+    esac
+    shift
+done
+
+ws_load_env
+
+if ws_is_login_node; then
+    ws_login_note | sed 's/^/[ws] note: /' >&2
+fi
+
+ws=$(ws_find_workspace || true)
+if [ -z "$ws" ] && [ -e "$HOME/ws-$WS_DATE/.ws-workspace" ]; then ws=$HOME/ws-$WS_DATE; fi
+if [ -z "$ws" ]; then
+    ws_die "$WS_E_ENV" "no workspace found (looked for \$WS_HOME, a .ws-workspace above $PWD, and $HOME/ws-$WS_DATE); run ws-init first"
+fi
+
+# byo_paragraph <title>: print the "**<title>** ..." paragraph of guide/BYO-HARNESS.md (kit copy first).
+byo_paragraph() {
+    local f
+    for f in "$WS_KIT_RO/workspace-template/guide/BYO-HARNESS.md" "$ws/guide/BYO-HARNESS.md"; do
+        if [ -r "$f" ]; then
+            awk -v t="**$1**" 'index($0, t) == 1 { on = 1 } on && /^[ \t]*$/ { exit } on { print }' "$f"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ -n "$byo" ]; then
+    case $byo in
+        claude)  title="Claude Code"; bin=claude ;;
+        codex)   title="Codex CLI";   bin=codex ;;
+        gemini)  title="Gemini CLI";  bin=gemini ;;
+        copilot) title="Copilot CLI"; bin=copilot ;;
+        aider)   title="Aider";       bin=aider ;;
+    esac
+    ws_info "bring your own harness: $title (best effort; the supported harness is opencode: run ws-agent with no flag)"
+    printf '\nLaunch it in this compute-node terminal:\n  cd %s && %s\nthen type: start\n\n' "$ws" "$bin"
+    para=$(byo_paragraph "$title" || true)
+    if [ -n "$para" ]; then
+        printf '%s\n' "$para"
+    else
+        printf '%s\n' "(No notes for $title in guide/BYO-HARNESS.md; it reads AGENTS.md like the others.)"
+    fi
+    if ! command -v "$bin" >/dev/null 2>&1; then
+        printf '\n'
+        ws_warn "$bin is not on your PATH yet; install it under \$HOME first (see above)"
+    fi
+    exit "$WS_E_OK"
+fi
+
+# The same settings env.sh exports (C16), for a shell that did not source it.
+export OPENCODE_DISABLE_FILEWATCHER=1
+export OPENCODE_DISABLE_AUTOUPDATE=1
+if [ -n "${WS_LLMFLUX_CONTAINERS_DIR:-}" ] && [ -d "$WS_LLMFLUX_CONTAINERS_DIR" ]; then
+    export LLMFLUX_CONTAINERS_DIR=$WS_LLMFLUX_CONTAINERS_DIR
+elif [ -d "$WS_KIT_RO/containers/2.0.0" ]; then
+    # Lustre copy of the LLMFlux containers, so many simultaneous starts do not all read /sw.
+    export LLMFLUX_CONTAINERS_DIR=$WS_KIT_RO/containers/2.0.0
+fi
+
+# Only the workshop key mode can point at the publish placeholder (auto falls back to the site key).
+if [ "$(ws_progress_field "$ws/PROGRESS.md" "lumen key")" = workshop ] && ws_lumen_key_placeholder "$WS_LUMEN_KEY_FILE"; then
+    ws_warn "the Lumen workshop key is not installed yet: pick the standby with /models (Workshop standby, ws-model)"
+fi
+if [ ! -f "$ws/opencode.json" ]; then
+    ws_warn "no opencode.json in $ws; the workshop agent will be missing (run ws-init)"
+fi
+
+cd "$ws"
+ws_info "starting hpc-gpt in $ws (the workshop agent is the default); when it is up, type: start"
+# On screen for a helper (red-team H8): the settings the agent's shell inherits (ws_load_env exported them).
+ws_info "agent environment: WS_ACCOUNT_GPU=${WS_ACCOUNT_GPU:--} WS_PART_GPU=${WS_PART_GPU:--} WS_RES_GPU=${WS_RES_GPU:--}"
+
+if [ "$(type -t module 2>/dev/null)" = function ]; then
+    # Lmod's shell function is visible here (exported by the login environment). A "module"
+    # executable would not do: a child process cannot change this shell's PATH.
+    set +u
+    module load hpc-gpt || ws_die "$WS_E_ENV" "module load hpc-gpt failed; ask a helper"
+    set -u
+    command -v hpc-gpt >/dev/null 2>&1 || ws_die "$WS_E_ENV" "hpc-gpt is not on PATH after module load hpc-gpt; ask a helper"
+    exec hpc-gpt
+fi
+
+# Non-login shell without the module function: let a login bash load the module, then exec.
+exec bash -lc 'module load hpc-gpt || { echo "[ws] error: module load hpc-gpt failed; ask a helper" >&2; exit 3; }
+command -v hpc-gpt >/dev/null 2>&1 || { echo "[ws] error: hpc-gpt is not on PATH after module load; ask a helper" >&2; exit 3; }
+cd -- "$1" || exit 3
+exec hpc-gpt' ws-agent "$ws"

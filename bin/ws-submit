@@ -1,0 +1,971 @@
+#!/usr/bin/env bash
+# ws-submit: the only way participants submit jobs: sbatch with the workshop's checks. Forces account,
+# partition and reservation, enforces the workshop caps, prints the sbatch command it runs, and is a
+# dry run unless --yes.
+# Design: staging/agents-workshop/design/kit.md §4 (caps §3). The script file is never modified:
+# every effective option goes on the sbatch command line, which overrides #SBATCH lines.
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-submit [--dry-run] [--yes] [--stretch] [--cpu] [--json] <script.sbatch>
+       ws-submit --via llmflux [--yes] [--json] -- <llmflux args>
+
+Reads the script's #SBATCH lines, forces the workshop account, partition and reservation,
+clamps --time (to the cap and to the reservation's end), rejects anything over the caps (1 GPU per node, 1 node, 16 CPUs per task,
+16 tasks per node, 60g) and a job without a GPU unless --cpu, runs sbatch --test-only, and prints
+the sbatch command it runs (on a dry run with a "directive -> effective" table). Nothing is
+submitted without --yes. A GPU submission is refused while two of your GPU jobs are queued or
+running, and a GPU --array runs one task at a time (%1). --nodelist, --exclude and --nodefile
+are rejected: Slurm and the reservation place workshop jobs. A script under open/ (M7) counts
+against the open-ended budget: --yes refuses it once this workspace has WS_OPEN_JOBS_MAX (10)
+open-ended jobs in any state; a dry run shows the count.
+
+  --dry-run   print only (the default; wins over --yes)
+  --yes       submit (the harness asks the participant); refused until PLAN.md has its
+              "approved: <participant> <HH:MM>" line (M2)
+  --stretch   allow 2 nodes (still 1 GPU per node) for a stretch exercise
+  --cpu       CPU job: the CPU account, partition and reservation
+  --json      print one JSON object instead of the text report
+  --via llmflux -- run ...
+              check the llmflux arguments, append the workshop's account, partition, GPU,
+              time, memory, CPU and reservation flags plus --debug, and (with --yes) run it
+EOF
+}
+
+TASKS_MAX=16      # --ntasks / --ntasks-per-node per node (design §4)
+ARRAY_MAX=4       # --array tasks
+STRETCH_NODES=2   # nodes allowed with --stretch
+LLMFLUX_TIME_MAX=900  # seconds; LLMFlux jobs get min(15 min, WS_TIME_MAX)
+# The last line of a dry run. The approval is the harness's prompt on the --yes command, not a
+# question in the chat before it (AGENTS.md rule 2).
+DRY_RUN_LINE='DRY RUN: nothing submitted. Rerun with --yes; the harness asks the participant.'
+
+mode=sbatch
+dry=0
+yes=0
+stretch=0
+cpu=0
+json=0
+script=
+extra=()
+while [ $# -gt 0 ]; do
+    case $1 in
+        --dry-run) dry=1 ;;
+        --yes) yes=1 ;;
+        --stretch) stretch=1 ;;
+        --cpu) cpu=1 ;;
+        --json) json=1 ;;
+        --via|--via=*)
+            if [ "$1" = --via ]; then
+                if [ $# -lt 2 ]; then ws_err "--via needs a value (llmflux)"; exit "$WS_E_USAGE"; fi
+                via=$2; shift
+            else
+                via=${1#--via=}
+            fi
+            if [ "$via" != llmflux ]; then ws_err "unknown --via '$via' (only llmflux)"; exit "$WS_E_USAGE"; fi
+            mode=llmflux
+            ;;
+        --) shift; extra=("$@"); break ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        -*) ws_err "unknown option: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+        *)
+            if [ -n "$script" ]; then ws_err "one script only (got '$script' and '$1')"; exit "$WS_E_USAGE"; fi
+            script=$1
+            ;;
+    esac
+    shift
+done
+
+if [ "$mode" = sbatch ]; then
+    if [ -z "$script" ] && [ "${#extra[@]}" -eq 1 ]; then script=${extra[0]}; extra=(); fi
+    if [ -z "$script" ] || [ "${#extra[@]}" -gt 0 ]; then usage >&2; exit "$WS_E_USAGE"; fi
+else
+    if [ -n "$script" ] || [ "$stretch" -eq 1 ] || [ "$cpu" -eq 1 ]; then
+        ws_err "--via llmflux takes only [--yes] [--json] -- <llmflux args>"; exit "$WS_E_USAGE"
+    fi
+    if [ "${#extra[@]}" -eq 0 ]; then usage >&2; exit "$WS_E_USAGE"; fi
+fi
+submit=0
+if [ "$yes" -eq 1 ] && [ "$dry" -eq 0 ]; then submit=1; fi
+
+ws_load_env
+: "${USER:=$(id -un)}"
+
+# --- environment checks (exit 3) ---
+ws=$(ws_find_workspace) || ws_die "$WS_E_ENV" "no workspace found: cd into your workspace (or run ws-init) and retry"
+ws=$(cd "$ws" && pwd -P)
+here=$(pwd -P)
+case $here/ in
+    "$ws"/*) ;;
+    *) ws_die "$WS_E_ENV" "the current directory $here is outside the workspace $ws; cd into it and retry" ;;
+esac
+# C17: the participant's approved plan gates execution. A dry run always works; a submission needs
+# PLAN.md's "approved: <participant> <HH:MM>" line, which the agent adds only after the participant
+# approves the plan in M2 (AGENTS.md rule 2). C22 (KF7): the refusal names the file it checked and
+# the cause, so an agent fixes the line instead of rewriting the plan (C21: 80 minutes of rewrites).
+if [ "$submit" -eq 1 ]; then
+    plan=$ws/PLAN.md
+    case $(ws_plan_approval_state "$plan") in
+        ok) ;;
+        nofile) ws_die "$WS_E_USAGE" "approve the plan first: there is no $plan; write the plan with the participant (M2), then add its approval line" ;;
+        indented) ws_die "$WS_E_USAGE" "approve the plan first: $plan has an 'approved:' line with blanks before it, which does not count; start the line with 'approved:' (no leading spaces)" ;;
+        empty) ws_die "$WS_E_USAGE" "approve the plan first: the 'approved:' line in $plan has no value; once the participant approves in words, write 'approved: <NetID> <HH:MM>' (both from ws-status)" ;;
+        placeholder) ws_die "$WS_E_USAGE" "approve the plan first: the 'approved:' line in $plan still holds the template's '<...>' placeholder; once the participant approves in words, replace it with their NetID and the time (ws-status)" ;;
+        *) ws_die "$WS_E_USAGE" "approve the plan first: $plan has no line starting with 'approved:'; once the participant approves in words, add 'approved: <NetID> <HH:MM>' as a line of its own" ;;
+    esac
+fi
+if [ "$cpu" -eq 1 ]; then
+    acct=$WS_ACCOUNT_CPU part=$WS_PART_CPU res=$WS_RES_CPU acct_var=WS_ACCOUNT_CPU res_var=WS_RES_CPU
+else
+    acct=$WS_ACCOUNT_GPU part=$WS_PART_GPU res=$WS_RES_GPU acct_var=WS_ACCOUNT_GPU res_var=WS_RES_GPU
+fi
+if [ -z "$acct" ]; then ws_die "$WS_E_ENV" "$acct_var is not set in workshop.env; ask a helper"; fi
+ws_require_cmd sbatch || exit "$WS_E_ENV"
+
+# --- output helpers: text goes to stdout unless --json ---
+notices=()
+rejected=()
+row_dir=()
+row_eff=()
+row_note=()
+say() { if [ "$json" -eq 0 ]; then printf '[ws] %s\n' "$*"; fi; }
+notice() { notices+=("$1"); }
+reject() { rejected+=("$1"); }
+row() { row_dir+=("$1"); row_eff+=("$2"); row_note+=("${3:-}"); }
+
+# q <args...>: print the arguments as one shell-quoted, copy-pastable line.
+q() {
+    local a out=
+    for a in "$@"; do out+="${out:+ }$(printf '%q' "$a")"; done
+    printf '%s\n' "$out"
+}
+
+json_list() {
+    local a out=
+    for a in "$@"; do out+="${out:+, }$(ws_json_str "$a")"; done
+    printf '[%s]' "$out"
+}
+
+# emit_json <effective_line> <test_only|""> <jobid|"">: print the --json object.
+emit_json() {
+    local i rows='' t=null j=null
+    for i in "${!row_dir[@]}"; do
+        rows+="${rows:+, }{\"directive\": $(ws_json_str "${row_dir[$i]}"), \"effective\": $(ws_json_str "${row_eff[$i]}"), \"note\": $(ws_json_str "${row_note[$i]}")}"
+    done
+    if [ -n "$2" ]; then t=$(ws_json_str "$2"); fi
+    if [ -n "$3" ]; then j=$(ws_json_str "$3"); fi
+    printf '{"effective_line": %s, "directives": [%s], "notices": %s, "rejected": %s, "test_only": %s, "jobid": %s}\n' \
+        "$(ws_json_str "$1")" "$rows" "$(json_list "${notices[@]}")" \
+        "$(json_list "${rejected[@]}")" "$t" "$j"
+}
+
+# finish_rejected <effective_line>: report every rejection and exit 2.
+finish_rejected() {
+    local r
+    if [ "$json" -eq 1 ]; then emit_json "$1" "" ""; fi
+    for r in "${rejected[@]}"; do ws_err "rejected: $r"; done
+    ws_err "nothing was submitted; fix the script (or the arguments) and rerun ws-submit"
+    exit "$WS_E_POLICY"
+}
+
+# --- sbatch option knowledge ---
+# Long options sbatch knows (it accepts unambiguous prefixes such as --part=, like getopt_long).
+SBATCH_LONG=(account acctg-freq array batch bb bbf begin chdir cluster-constraint clusters comment
+    constraint container container-id contiguous core-spec cores-per-socket cpu-freq cpus-per-gpu
+    cpus-per-task deadline delay-boot dependency distribution error exclude exclusive export export-file
+    extra extra-node-info get-user-env gid gpu-bind gpu-freq gpus gpus-per-node gpus-per-socket
+    gpus-per-task gres gres-flags hint hold ignore-pbs input job-name kill-on-invalid-dep licenses
+    mail-type mail-user mcs-label mem mem-bind mem-per-cpu mem-per-gpu mincpus network nice no-kill
+    no-requeue nodefile nodelist nodes ntasks ntasks-per-core ntasks-per-gpu ntasks-per-node
+    ntasks-per-socket oom-kill-step open-mode output overcommit oversubscribe parsable partition power
+    prefer priority profile propagate qos quiet reboot requeue reservation resv-ports segment signal
+    sockets-per-node spread-job switches test-only thread-spec threads-per-core time time-min tmp
+    tres-bind tres-per-task uid use-min-nodes verbose version wait wait-all-nodes wckey wrap)
+# Options without an argument (or with an optional one, which getopt only takes after '=').
+SBATCH_FLAGS=(contiguous exclusive get-user-env hold ignore-pbs nice no-kill no-requeue overcommit
+    oversubscribe parsable propagate quiet reboot requeue spread-job test-only use-min-nodes verbose
+    version wait wait-all-nodes)
+
+# resolve <name> <known...>: print the known option that <name> is or unambiguously abbreviates;
+# print <name> itself when it is unknown; print "?ambiguous" when several options match.
+resolve() {
+    local n=$1 o hit='' count=0
+    shift
+    for o in "$@"; do
+        if [ "$o" = "$n" ]; then printf '%s\n' "$n"; return 0; fi
+        case $o in "$n"*) hit=$o; count=$((count + 1)) ;; esac
+    done
+    case $count in
+        0) printf '%s\n' "$n" ;;
+        1) printf '%s\n' "$hit" ;;
+        *) printf '?ambiguous\n' ;;
+    esac
+}
+
+# canon_long <name>: the full sbatch option name (unknown or ambiguous names come back unchanged).
+canon_long() {
+    local r
+    r=$(resolve "$1" "${SBATCH_LONG[@]}")
+    if [ "$r" = '?ambiguous' ]; then r=$1; fi
+    printf '%s\n' "$r"
+}
+
+is_flag() {
+    local o
+    for o in "${SBATCH_FLAGS[@]}"; do if [ "$o" = "$1" ]; then return 0; fi; done
+    return 1
+}
+
+# short_long <letter>: the long name of a short option that takes a value; fail otherwise.
+short_long() {
+    case $1 in
+        A) echo account ;; a) echo array ;; b) echo begin ;; c) echo cpus-per-task ;;
+        C) echo constraint ;; d) echo dependency ;; D) echo chdir ;; e) echo error ;;
+        F) echo nodefile ;; G) echo gpus ;; i) echo input ;; J) echo job-name ;;
+        L) echo licenses ;; M) echo clusters ;; m) echo distribution ;; n) echo ntasks ;;
+        N) echo nodes ;; o) echo output ;; p) echo partition ;; q) echo qos ;;
+        S) echo core-spec ;; t) echo time ;; w) echo nodelist ;; x) echo exclude ;;
+        *) return 1 ;;
+    esac
+}
+
+# short_flag <letter>: the long name of a short option without a value; fail otherwise.
+short_flag() {
+    case $1 in
+        H) echo hold ;; k) echo no-kill ;; O) echo overcommit ;; Q) echo quiet ;;
+        s) echo oversubscribe ;; v) echo verbose ;; W) echo wait ;;
+        *) return 1 ;;
+    esac
+}
+
+# --- value parsing ---
+# time_sec <slurm time>: seconds; UNLIMITED/INFINITE are huge; fail when not a Slurm time.
+time_sec() {
+    local t=$1 d=0 h=0 m=0 s=0 a b c
+    case $t in UNLIMITED|INFINITE|unlimited|infinite) echo 999999999; return 0 ;; esac
+    if [[ $t =~ ^([0-9]+)-([0-9]+)(:([0-9]+))?(:([0-9]+))?$ ]]; then
+        d=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]} m=${BASH_REMATCH[4]:-0} s=${BASH_REMATCH[6]:-0}
+    elif [[ $t =~ ^([0-9]+)(:([0-9]+))?(:([0-9]+))?$ ]]; then
+        a=${BASH_REMATCH[1]} b=${BASH_REMATCH[3]} c=${BASH_REMATCH[5]}
+        if [ -n "$c" ]; then h=$a m=$b s=$c
+        elif [ -n "$b" ]; then m=$a s=$b
+        else m=$a
+        fi
+    else
+        return 1
+    fi
+    echo $(( ((10#$d * 24 + 10#$h) * 60 + 10#$m) * 60 + 10#$s ))
+}
+
+hms() { printf '%02d:%02d:%02d\n' $(($1 / 3600)) $(($1 % 3600 / 60)) $(($1 % 60)); }
+
+# res_left <reservation> (the time left inside the reservation) and RES_MARGIN, RES_MIN_LEFT are in
+# lib/ws-common.sh: ws_session_srun clamps the session shell with them too.
+
+# mem_mb <size>: MiB for a Slurm size (K, M default, G, T); fail when not a size.
+mem_mb() {
+    [[ $1 =~ ^([0-9]+(\.[0-9]+)?)([KkMmGgTt]?)[Bb]?$ ]] || return 1
+    awk -v v="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]}" 'BEGIN {
+        u = tolower(u); f = 1
+        if (u == "k") f = 1 / 1024; else if (u == "g") f = 1024; else if (u == "t") f = 1024 * 1024
+        printf "%d\n", v * f + 0.5 }'
+}
+
+# gpu_count <value>: the count in "N", "type:N" (a missing count is 1); fail when unparseable.
+gpu_count() {
+    local v=${1##*:}
+    if [[ $v =~ ^[0-9]+$ ]]; then echo "$((10#$v))"; return 0; fi
+    if [[ $1 =~ ^[A-Za-z0-9_.-]+$ ]]; then echo 1; return 0; fi
+    return 1
+}
+
+# gres_gpus <gres list>: total GPUs in a --gres list ("gpu:2", "gpu:a40:1,shard:1").
+gres_gpus() {
+    local item n total=0
+    local IFS=,
+    for item in $1; do
+        case $item in
+            gpu|gpu:*) n=$(gpu_count "${item#gpu}") || n=${item##*:}; [[ $n =~ ^[0-9]+$ ]] || n=1; total=$((total + n)) ;;
+        esac
+    done
+    echo "$total"
+}
+
+# array_count <spec>: number of tasks in an --array spec ("0-3", "1,5,7", "0-15:4%2").
+array_count() {
+    local spec=${1%%%*} item a b st total=0
+    local IFS=,
+    for item in $spec; do
+        if [[ $item =~ ^([0-9]+)-([0-9]+)(:([0-9]+))?$ ]]; then
+            a=${BASH_REMATCH[1]} b=${BASH_REMATCH[2]} st=${BASH_REMATCH[4]:-1}
+            if [ "$st" -eq 0 ] || [ "$b" -lt "$a" ]; then return 1; fi
+            total=$((total + (b - a) / st + 1))
+        elif [[ $item =~ ^[0-9]+$ ]]; then
+            total=$((total + 1))
+        else
+            return 1
+        fi
+    done
+    echo "$total"
+}
+
+# inside_ws <path> <base dir>: succeed when the path (relative to base) resolves inside the workspace.
+inside_ws() {
+    local p=$1
+    case $p in /*) ;; *) p=$2/$p ;; esac
+    p=$(realpath -m -- "$p")
+    case $p/ in "$ws"/*) return 0 ;; esac
+    return 1
+}
+
+topic=$(ws_progress_field "$ws/PROGRESS.md" topic)
+hm=$(ws_now_hm)
+inherited=$(ws_inherited_slurm_vars | wc -l)
+
+# record_job <jobid> <script column> <effective line> <gpu|cpu>: .ws/jobs.tsv row (the 6th column,
+# kind, counts the live GPU jobs) plus a PROGRESS.md "## Jobs" line. Readers of columns 1-5 are
+# unchanged. Sets recorded_in for submitted_note.
+recorded_in='PROGRESS.md (## Jobs)'
+record_job() {
+    local f=$ws/.ws/jobs.tsv t=${topic:-none}
+    if [ ! -f "$f" ]; then mkdir -p "$ws/.ws"; printf 'jobid\ttime\tscript\ttopic\teffective\tkind\n' > "$f"; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$hm" "$2" "$t" "${3//$'\t'/ }" "$4" >> "$f"
+    if ! ws_progress_add_job "$ws/PROGRESS.md" "- $1 $2 submitted $hm"; then
+        ws_warn "could not add job $1 to PROGRESS.md (missing?); it is recorded in .ws/jobs.tsv"
+        recorded_in=.ws/jobs.tsv
+    fi
+}
+
+# submitted_note <jobid>: after "Submitted batch job N": where the job is recorded and the next step.
+submitted_note() { say "job $1 recorded in $recorded_in; next: ws-wait $1 --timeout 100"; }
+
+# Q32: at most GPU_LIVE_MAX GPU jobs per participant pending or running at once (fifty people share
+# the GPUs). GPU arrays run one task at a time (%1).
+GPU_LIVE_MAX=2
+
+# gpu_live_check: before a GPU submission, count this workspace's live GPU jobs: squeue's pending and
+# running ids intersected with the .ws/jobs.tsv ids of kind gpu (a row without a kind is a GPU job
+# unless its effective line has --partition=$WS_PART_CPU). At GPU_LIVE_MAX or more, refuse (exit 2).
+# When squeue fails, warn and submit: a Slurm hiccup must not block the participant.
+gpu_live_check() {
+    local live ids n msg
+    if ! command -v squeue >/dev/null 2>&1 || ! live=$(squeue -u "$USER" -h -t PD,R -o %i 2>/dev/null); then
+        ws_warn "squeue did not answer, so the limit of $GPU_LIVE_MAX GPU jobs at a time was not checked; submitting"
+        return 0
+    fi
+    # squeue prints one id per line; an array job is <id>_<task> or <id>_[<range>]: its base id counts once.
+    ids=$(WS_LIVE=$live awk -F'\t' -v cpu="--partition=$WS_PART_CPU" '
+        BEGIN { n = split(ENVIRON["WS_LIVE"], l, "\n")
+                for (i = 1; i <= n; i++) {
+                    s = l[i]; sub(/^[ \t]+/, "", s); sub(/[ \t].*$/, "", s); sub(/_.*$/, "", s)
+                    if (s != "") live[s] = 1 } }
+        NR > 1 && $1 ~ /^[0-9]+$/ && !seen[$1]++ {
+            gpu = ($6 != "") ? ($6 == "gpu") : (index($5, cpu) == 0)
+            if (gpu && ($1 in live)) print $1 }' "$ws/.ws/jobs.tsv" 2>/dev/null) || ids=
+    n=$(printf '%s' "$ids" | grep -c . || true)
+    if [ "$n" -ge "$GPU_LIVE_MAX" ]; then
+        msg="two GPU jobs already queued or running ($(printf '%s\n' "$ids" | paste -sd, - | sed 's/,/, /g')). Fix: wait for one, or ws-cancel --yes <id>."
+        if [ "$json" -eq 1 ]; then rejected+=("$msg"); emit_json "$line" "" ""; fi
+        ws_die "$WS_E_POLICY" "$msg"
+    fi
+}
+
+# C22 (Q43): the open-ended budget. At most WS_OPEN_JOBS_MAX jobs per workspace from open/ (a script
+# under open/, or an LLMFlux run from open/), counted from .ws/jobs.tsv in any state: about 50 people
+# share the reservation's 8 A40s and 2 CPU nodes, and the C21 gate's agents ran 11-22 open jobs each.
+# open_budget <0|1>: for an open-ended job, a dry run shows the count; --yes over the budget is refused
+# (exit 2). Other jobs (the prepared topic) are not counted.
+open_budget() {
+    local n ids msg
+    [ "$1" -eq 1 ] || return 0
+    [[ $WS_OPEN_JOBS_MAX =~ ^[0-9]+$ ]] || ws_die "$WS_E_ENV" "WS_OPEN_JOBS_MAX='$WS_OPEN_JOBS_MAX' is not a number; ask a helper"
+    ids=$(ws_open_jobs "$ws")
+    n=$(printf '%s' "$ids" | grep -c . || true)
+    if [ "$n" -ge "$WS_OPEN_JOBS_MAX" ]; then
+        msg="the open-ended budget is used up: $n of $WS_OPEN_JOBS_MAX open-ended jobs from this workspace (any state). About 50 people share 8 A40s and 2 CPU nodes, so M7 allows $WS_OPEN_JOBS_MAX jobs per workspace, each answering one question. Fix: report what the jobs showed in open/RESULTS.md; no further job runs from open/"
+        if [ "$submit" -eq 1 ]; then
+            if [ "$json" -eq 1 ]; then rejected+=("$msg"); emit_json "$line" "" ""; fi
+            ws_die "$WS_E_POLICY" "$msg"
+        fi
+        notice "$msg (--yes refuses this job)"
+    else
+        notice "open-ended jobs from this workspace: $n of $WS_OPEN_JOBS_MAX (any state); this one is number $((n + 1))"
+    fi
+}
+
+# magnetic_note: the notice for a magnetic reservation (C22, KF1: C21's agents read "no reservation is
+# configured" as "no reservation today"; the workshop reservation applies, it just needs no flag).
+magnetic_note() {
+    printf 'the workshop reservation %s is magnetic: it takes this job by itself when it has room (no --reservation needed), else the job runs outside it in the general queue; both are fine\n' \
+        "$WS_RES_MAGNETIC"
+}
+
+scrub_notice() {
+    if [ "$inherited" -gt 0 ]; then
+        notice "removing $inherited inherited SLURM_*/SBATCH_*/SRUN_*/SALLOC_* variables before submitting (this shell is inside a job; a child job would inherit them and its srun would fail)"
+    fi
+}
+
+print_notices() {
+    local n
+    for n in "${notices[@]}"; do say "notice: $n"; done
+}
+
+########################################################################################
+# --via llmflux
+########################################################################################
+if [ "$mode" = llmflux ]; then
+    sub=${extra[0]}
+    case $sub in
+        run|serve|benchmark) ;;
+        cancel) ws_die "$WS_E_POLICY" "cancel jobs with ws-cancel <jobid>, not llmflux cancel" ;;
+        *) ws_die "$WS_E_USAGE" "ws-submit --via llmflux submits only (run, serve, benchmark); 'llmflux $sub' is read-only: run it directly after module load llmflux" ;;
+    esac
+    # Options of llmflux run/serve/benchmark 2.0.0 (tests/fixtures/llmflux-run-help.txt). llmflux
+    # uses argparse, which also accepts unambiguous prefixes (--acc for --account).
+    LLMFLUX_OPTS=(model input output batch-size save-frequency max-retries retry-delay max-tokens
+        temperature top-p top-k account partition nodes gpus-per-node time mem cpus-per-task engine
+        sbatch-arg rebuild debug vllm-engine-args custom-config-path email name num-prompts help)
+    # sbatch keys --sbatch-arg must not set (the forced trio and the caps).
+    DENY_KEYS=(reservation account partition time nodes gpus gpus-per-node gpus-per-task gres qos
+        exclusive array begin mem mem-per-cpu mem-per-gpu cpus-per-task ntasks ntasks-per-node
+        output error chdir nodelist exclude nodefile)
+    check_sbatch_arg() {
+        local kv=$1 key k
+        key=${kv%%=*}
+        key=${key#--}; key=${key#-}
+        if [ "${#key}" -eq 1 ] && short_long "$key" >/dev/null; then key=$(short_long "$key"); fi
+        key=$(canon_long "$key")
+        for k in "${DENY_KEYS[@]}"; do
+            if [ "$k" != "$key" ]; then continue; fi
+            if [ "$key" = reservation ]; then
+                reject "--sbatch-arg $kv: ws-submit adds the workshop reservation itself. Fix: remove --sbatch-arg $kv"
+            elif [ "$key" = nodelist ] || [ "$key" = exclude ] || [ "$key" = nodefile ]; then
+                reject "--sbatch-arg $kv: Slurm and the reservation place workshop jobs, and pinning a job stacks jobs on one node. Fix: remove --sbatch-arg $kv"
+            else
+                reject "--sbatch-arg $kv: sets --$key, which the workshop caps control. Fix: remove --sbatch-arg $kv"
+            fi
+        done
+    }
+    n=${#extra[@]}
+    i=1
+    while [ "$i" -lt "$n" ]; do
+        a=${extra[$i]}
+        i=$((i + 1))
+        case $a in --?*) ;; *) continue ;; esac
+        name=${a%%=*}; name=${name#--}
+        opt=$(resolve "$name" "${LLMFLUX_OPTS[@]}")
+        case $opt in
+            account|partition|time|nodes|gpus-per-node)
+                reject "$a: ws-submit sets --$opt for workshop jobs. Fix: remove $a from the llmflux arguments" ;;
+            '?ambiguous')
+                reject "$a: an ambiguous abbreviation. Fix: spell the option out in full" ;;
+            sbatch-arg)
+                if [[ $a == *=* ]]; then
+                    check_sbatch_arg "${a#*=}"
+                elif [ "$i" -lt "$n" ]; then
+                    check_sbatch_arg "${extra[$i]}"; i=$((i + 1))
+                fi ;;
+            mem|cpus-per-task)
+                notice "your $a is replaced by the workshop value (appended last, so it wins)" ;;
+        esac
+    done
+
+    tmax=$(time_sec "$WS_TIME_MAX") || ws_die "$WS_E_ENV" "WS_TIME_MAX='$WS_TIME_MAX' is not a Slurm time; ask a helper"
+    if [ "$tmax" -gt "$LLMFLUX_TIME_MAX" ]; then tmax=$LLMFLUX_TIME_MAX; fi
+    if [ -n "$WS_RES_GPU" ] && rl=$(res_left "$WS_RES_GPU"); then
+        rleft=${rl%% *} res_end=${rl#* }
+        if [ "$rleft" -lt "$RES_MIN_LEFT" ]; then
+            reject "the reservation $WS_RES_GPU ends at $res_end: less than $((RES_MIN_LEFT / 60)) minutes are left for a job. Fix: none inside the workshop; ask a helper"
+        elif [ "$rleft" -lt "$tmax" ]; then
+            tmax=$rleft
+            notice "the reservation $WS_RES_GPU ends at $res_end; --time clamped to $(hms "$tmax") so the job ends inside it"
+        fi
+    fi
+    ltime=$(hms "$tmax")
+    add=(--account "$WS_ACCOUNT_GPU" --partition "$WS_PART_GPU" --gpus-per-node 1 --time "$ltime"
+        --mem 32G --cpus-per-task 8 --debug)
+    if [ -n "$WS_RES_GPU" ]; then
+        add+=(--sbatch-arg "reservation=$WS_RES_GPU")
+    elif [ -n "$WS_RES_MAGNETIC" ]; then
+        notice "$(magnetic_note)"
+    else
+        notice "no workshop reservation is configured (WS_RES_GPU is empty); submitting without --sbatch-arg reservation=..."
+    fi
+    j=0
+    while [ "$j" -lt "${#add[@]}" ]; do
+        if [ "${add[$j]}" = --debug ]; then
+            row "(none)" "--debug" "enforced (keeps job.sh)"; j=$((j + 1))
+        else
+            row "(none)" "${add[$j]} ${add[$((j + 1))]}" "enforced"; j=$((j + 2))
+        fi
+    done
+    cmd=(llmflux "${extra[@]}" "${add[@]}")
+    line=$(q "${cmd[@]}")
+    if [ "${#rejected[@]}" -gt 0 ]; then finish_rejected "$line"; fi
+    # An LLMFlux run from open/ (README idea 6: open/run.sh) is an open-ended job.
+    rel=${here#"$ws"}; rel=${rel#/}
+    case $rel/ in open/*) open_budget 1 ;; esac
+    scrub_notice
+    # The llmflux module sets LLMFLUX_CONTAINERS_DIR to its /sw directory, so a staged Lustre copy of
+    # the container (WS_LLMFLUX_CONTAINERS_DIR) is exported after the module load. Only a directory that
+    # holds llm_processor.sif: without it the generated job would try to build the container.
+    lc='module reset && module load llmflux && '
+    cdir=${WS_LLMFLUX_CONTAINERS_DIR:-}
+    if [ -n "$cdir" ] && [ -d "$cdir" ] && [ -f "$cdir/llm_processor.sif" ]; then
+        lc+="export LLMFLUX_CONTAINERS_DIR=$(printf '%q' "$cdir") && "
+    elif [ -n "$cdir" ]; then
+        notice "WS_LLMFLUX_CONTAINERS_DIR=$cdir has no llm_processor.sif; the job uses the module's container directory"
+    fi
+    # shellcheck disable=SC2016  # $@ expands in the child shell, which receives the arguments.
+    lc+='llmflux "$@"'
+
+    # C23 (Q47): the label says what the line is: the command ws-submit runs, byte for byte; LLMFlux
+    # then writes the job script and calls sbatch itself (llmflux 2.0.0, slurm/runner.py).
+    notice "LLMFlux writes the job script job.sh in $here (the account, partition, GPU and time flags above become its #SBATCH lines) and runs sbatch job.sh itself"
+    if [ "$json" -eq 0 ]; then
+        if [ "$submit" -eq 1 ]; then
+            say "ws-submit runs this llmflux command (from $here):"
+        else
+            say "ws-submit runs this llmflux command (from $here; dry run: nothing submitted yet):"
+        fi
+        printf '%s\n' "$line"
+        say "runs as: bash -lc '${lc%\"\$@\"}...' with SLURM_*/SBATCH_*/SRUN_*/SALLOC_* removed"
+        # The table is for the dry run; with --yes the command line above already shows it.
+        if [ "$submit" -eq 0 ]; then
+            say "appended by ws-submit:"
+            for i in "${!row_eff[@]}"; do printf '  %-40s %s\n' "${row_eff[$i]}" "${row_note[$i]}"; done
+        fi
+        print_notices
+    fi
+    if [ "$submit" -eq 0 ]; then
+        if [ "$json" -eq 1 ]; then emit_json "$line" "" ""; else echo "$DRY_RUN_LINE"; fi
+        exit "$WS_E_OK"
+    fi
+    gpu_live_check
+    rc=0
+    out=$(ws_run_scrubbed bash -lc "$lc" llmflux "${extra[@]}" "${add[@]}" 2>&1) || rc=$?
+    if [ "$json" -eq 0 ] && [ -n "$out" ]; then printf '%s\n' "$out"; fi
+    if [ "$rc" -ne 0 ]; then
+        if [ "$json" -eq 1 ]; then printf '%s\n' "$out" >&2; fi
+        ws_die "$WS_E_SLURM" "llmflux exited $rc; nothing was recorded (read the output above)"
+    fi
+    jobid=$(printf '%s\n' "$out" | grep -oE 'Submitted batch job [0-9]+|Job ID: [0-9]+|Serve job submitted: [0-9]+' \
+        | tail -n 1 | grep -oE '[0-9]+$') || jobid=
+    if [ -z "$jobid" ]; then
+        ws_die "$WS_E_SLURM" "no job id in the llmflux output (expected 'Submitted batch job N' or 'Job ID: N'); check squeue -u $USER"
+    fi
+    record_job "$jobid" "llmflux:${rel:-.}" "$line" gpu
+    if [ "$json" -eq 1 ]; then emit_json "$line" "" "$jobid"; else echo "Submitted batch job $jobid"; submitted_note "$jobid"; fi
+    exit "$WS_E_OK"
+fi
+
+########################################################################################
+# sbatch script
+########################################################################################
+if [ ! -f "$script" ] || [ ! -r "$script" ]; then ws_die "$WS_E_USAGE" "no readable script: $script"; fi
+script_abs=$(realpath -- "$script")
+case $script_abs in
+    "$ws"/*) script_rel=${script_abs#"$ws"/} ;;
+    *) script_rel=$script_abs ;;
+esac
+if [ -z "$topic" ]; then
+    case $script_rel in topics/*/*) topic=${script_rel#topics/}; topic=${topic%%/*} ;; esac
+fi
+
+# Parsed directives: order of first appearance, value (last wins), the text as written, flag or not.
+d_order=()
+declare -A d_val=() d_src=() d_flag=()
+set_opt() {
+    if [ -z "${d_src[$1]+x}" ]; then d_order+=("$1"); fi
+    d_val[$1]=$2
+    d_src[$1]=$3
+    d_flag[$1]=${4:-0}
+}
+
+parse_tokens() {
+    local t name val long
+    while [ $# -gt 0 ]; do
+        t=$1; shift
+        case $t in
+            --?*=*)
+                name=${t%%=*}; name=$(canon_long "${name#--}")
+                set_opt "$name" "${t#*=}" "$t" ;;
+            --?*)
+                name=$(canon_long "${t#--}")
+                if is_flag "$name" || [ $# -eq 0 ] || [[ $1 == -* ]]; then
+                    set_opt "$name" "" "$t" 1
+                else
+                    val=$1; shift
+                    set_opt "$name" "$val" "$t $val"
+                fi ;;
+            -?*)
+                if long=$(short_flag "${t:1:1}"); then
+                    set_opt "$long" "" "$t" 1
+                elif long=$(short_long "${t:1:1}"); then
+                    if [ "${#t}" -gt 2 ]; then
+                        val=${t:2}; val=${val#=}
+                        set_opt "$long" "$val" "$t"
+                    elif [ $# -gt 0 ]; then
+                        val=$1; shift
+                        set_opt "$long" "$val" "$t $val"
+                    else
+                        set_opt "$long" "" "$t" 1
+                    fi
+                else
+                    notice "unknown option $t in the script is passed through unchanged"
+                    set_opt "$t" "" "$t" 1
+                fi ;;
+            *) notice "ignored stray word '$t' on an #SBATCH line" ;;
+        esac
+    done
+}
+
+# sbatch reads #SBATCH lines until the first line that is neither blank nor a comment.
+lineno=0
+while IFS= read -r l || [ -n "$l" ]; do
+    lineno=$((lineno + 1))
+    l=${l%$'\r'}
+    if [ "$lineno" -eq 1 ] && [[ $l == '#!'* ]]; then continue; fi
+    trimmed=${l#"${l%%[![:space:]]*}"}
+    if [ -z "$trimmed" ]; then continue; fi
+    if [[ $l == '#SBATCH'[[:space:]]* ]]; then
+        rest=${l#'#SBATCH'}
+        rest=${rest%%[[:space:]]#*}
+        read -ra toks <<< "$rest"
+        # Strip one level of quotes around values: --job-name="x" -> --job-name=x.
+        for k in "${!toks[@]}"; do
+            v=${toks[$k]}
+            if [[ $v =~ ^(--?[A-Za-z-]+=)?[\"\'](.*)[\"\']$ ]]; then toks[k]=${BASH_REMATCH[1]}${BASH_REMATCH[2]}; fi
+        done
+        if [ "${#toks[@]}" -gt 0 ]; then parse_tokens "${toks[@]}"; fi
+        continue
+    fi
+    if [[ $trimmed == '#'* ]]; then continue; fi
+    break
+done < "$script"
+
+has() { [ -n "${d_src[$1]+x}" ]; }
+val() { printf '%s\n' "${d_val[$1]:-}"; }
+src() { printf '%s\n' "${d_src[$1]:-(none)}"; }
+
+# --- caps ---
+node_cap=$WS_NODES_MAX
+if [ "$stretch" -eq 1 ] && [ "$node_cap" -lt "$STRETCH_NODES" ]; then node_cap=$STRETCH_NODES; fi
+nodes_min=1
+nodes_max=1
+if has nodes; then
+    nv=$(val nodes)
+    if [[ $nv =~ ^([0-9]+)(-([0-9]+))?$ ]]; then
+        nodes_min=$((10#${BASH_REMATCH[1]})); nodes_max=$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))
+        if [ "$nodes_min" -lt 1 ]; then nodes_min=1; fi
+    else
+        reject "$(src nodes): not a node count. Fix: --nodes=1"
+    fi
+    if [ "$nodes_max" -gt "$node_cap" ]; then
+        if [ "$stretch" -eq 0 ] && [ "$nodes_max" -le "$STRETCH_NODES" ]; then
+            reject "$(src nodes): at most $WS_NODES_MAX node per job. Fix: --nodes=$WS_NODES_MAX, or ws-submit --stretch for the $STRETCH_NODES-node stretch exercise (1 GPU per node)"
+        else
+            reject "$(src nodes): at most $node_cap nodes even with --stretch. Fix: --nodes=$node_cap or fewer"
+        fi
+    fi
+fi
+
+tasks_per_node=1
+if has ntasks-per-node; then
+    tv=$(val ntasks-per-node)
+    if [[ $tv =~ ^[0-9]+$ ]]; then
+        tasks_per_node=$((10#$tv))
+        if [ "$tasks_per_node" -gt "$TASKS_MAX" ]; then
+            reject "$(src ntasks-per-node): at most $TASKS_MAX tasks per node. Fix: --ntasks-per-node=$TASKS_MAX or fewer"
+        fi
+    else
+        reject "$(src ntasks-per-node): not a number. Fix: --ntasks-per-node=1"
+    fi
+fi
+if has ntasks; then
+    tv=$(val ntasks)
+    if [[ $tv =~ ^[0-9]+$ ]]; then
+        per=$(( (10#$tv + nodes_min - 1) / nodes_min ))
+        if [ "$per" -gt "$TASKS_MAX" ]; then
+            reject "$(src ntasks): $per tasks per node; at most $TASKS_MAX. Fix: --ntasks=$((TASKS_MAX * nodes_min)) or fewer"
+        fi
+        if ! has ntasks-per-node; then tasks_per_node=$per; fi
+    else
+        reject "$(src ntasks): not a number. Fix: --ntasks=1"
+    fi
+fi
+
+cpt=1
+if [ "$cpu" -eq 0 ]; then cpt=16; fi
+if has cpus-per-task; then
+    cv=$(val cpus-per-task)
+    if [[ $cv =~ ^[0-9]+$ ]]; then
+        cpt=$((10#$cv))
+        if [ "$cpt" -gt "$WS_CPUS_MAX" ]; then
+            reject "$(src cpus-per-task): at most $WS_CPUS_MAX CPUs per task. Fix: --cpus-per-task=$WS_CPUS_MAX"
+        fi
+    else
+        reject "$(src cpus-per-task): not a number. Fix: --cpus-per-task=$WS_CPUS_MAX"
+    fi
+fi
+
+gpus_node=0
+gpu_fix="Fix: --gpus-per-node=$WS_GPU_MAX"
+check_gpus() {  # check_gpus <option> <gpus per node>
+    if [ "$2" -gt "$WS_GPU_MAX" ]; then
+        reject "$(src "$1"): $2 GPUs per node; the workshop allows $WS_GPU_MAX. $gpu_fix"
+    fi
+    if [ "$2" -gt "$gpus_node" ]; then gpus_node=$2; fi
+}
+for o in gpus-per-node gpus gres gpus-per-task; do
+    has "$o" || continue
+    gv=$(val "$o")
+    case $o in
+        gres) g=$(gres_gpus "$gv") ;;
+        *) g=$(gpu_count "$gv") || { reject "$(src "$o"): not a GPU count. $gpu_fix"; continue; } ;;
+    esac
+    case $o in
+        gpus) g=$(( (g + nodes_min - 1) / nodes_min )) ;;
+        gpus-per-task) g=$((g * tasks_per_node)) ;;
+    esac
+    check_gpus "$o" "$g"
+done
+if [ "$cpu" -eq 1 ] && [ "$gpus_node" -gt 0 ]; then
+    reject "a GPU is requested in a --cpu submission ($WS_PART_CPU has no GPUs). Fix: remove the GPU directive, or submit without --cpu"
+fi
+# Without --cpu the job goes to the GPU account and partition, where a job that asks for no GPU
+# runs without one (CP-s T8). Rejected on the dry run too, so the agent learns it before --yes.
+if [ "$cpu" -eq 0 ] && [ "$gpus_node" -eq 0 ]; then
+    reject "no GPU is requested: this is a CPU job. Fix: ws-submit --cpu $script (or add #SBATCH --gpus-per-node=1 for a GPU job)"
+fi
+
+mem_max_mb=$(mem_mb "$WS_MEM_MAX") || ws_die "$WS_E_ENV" "WS_MEM_MAX='$WS_MEM_MAX' is not a size; ask a helper"
+check_mem() {  # check_mem <option> <total MiB per node>
+    if [ "$2" -gt "$mem_max_mb" ]; then
+        reject "$(src "$1"): $(( $2 / 1024 ))g per node; at most $WS_MEM_MAX. Fix: --mem=$WS_MEM_MAX or less"
+    fi
+}
+if has mem; then
+    if mv=$(mem_mb "$(val mem)"); then
+        if [ "$mv" -eq 0 ]; then
+            reject "$(src mem): --mem=0 asks for all of a node's memory. Fix: --mem=48g (GPU) or --mem=16g (CPU)"
+        else
+            check_mem mem "$mv"
+        fi
+    else
+        reject "$(src mem): not a memory size. Fix: --mem=48g"
+    fi
+fi
+if has mem-per-cpu; then
+    if mv=$(mem_mb "$(val mem-per-cpu)"); then check_mem mem-per-cpu $((mv * cpt * tasks_per_node))
+    else reject "$(src mem-per-cpu): not a memory size. Fix: use --mem=48g instead"; fi
+fi
+if has mem-per-gpu; then
+    if mv=$(mem_mb "$(val mem-per-gpu)"); then check_mem mem-per-gpu $((mv * (gpus_node > 0 ? gpus_node : 1)))
+    else reject "$(src mem-per-gpu): not a memory size. Fix: use --mem=48g instead"; fi
+fi
+
+if has exclusive; then reject "$(src exclusive): whole nodes are not available in the workshop. Fix: remove #SBATCH --exclusive"; fi
+# C22 (KF4): node pinning. Slurm and the reservation place workshop jobs; a pinned job stacks on one
+# node, often a Code Server host (C21: an agent pinned 7 jobs to its own session node).
+for o in nodelist exclude nodefile; do
+    if has "$o"; then
+        reject "$(src "$o"): Slurm and the reservation place workshop jobs, and pinning a job stacks jobs on one node (often the one running the Code Server sessions). Fix: remove #SBATCH --$o"
+    fi
+done
+if has qos; then reject "$(src qos): the workshop reservation sets the QOS. Fix: remove #SBATCH --qos"; fi
+if has begin; then reject "$(src begin): delayed starts do not fit the session. Fix: remove #SBATCH --begin"; fi
+if has array; then
+    if ac=$(array_count "$(val array)"); then
+        if [ "$ac" -gt "$ARRAY_MAX" ]; then
+            reject "$(src array): $ac array tasks; at most $ARRAY_MAX. Fix: --array=0-$((ARRAY_MAX - 1))"
+        fi
+    else
+        reject "$(src array): not an array spec ws-submit understands. Fix: --array=0-$((ARRAY_MAX - 1))"
+    fi
+fi
+base=$here
+if has chdir; then
+    if inside_ws "$(val chdir)" "$here"; then
+        base=$(realpath -m -- "$(val chdir)")
+    else
+        reject "$(src chdir): the job must run inside your workspace $ws. Fix: remove #SBATCH --chdir"
+    fi
+fi
+for o in output error; do
+    has "$o" || continue
+    if ! inside_ws "$(val "$o")" "$base"; then
+        reject "$(src "$o"): the log must stay inside your workspace $ws. Fix: --$o=slurm-%j.out"
+    fi
+done
+
+# --- effective options: forced trio, time, the script's directives, then defaults ---
+eff=()
+force() {  # force <option> <value> <variable name>
+    local o=$1 v=$2
+    eff+=("--$o=$v")
+    if ! has "$o"; then
+        row "(none)" "--$o=$v" "forced"
+    elif [ "$(val "$o")" = "$v" ]; then
+        row "$(src "$o")" "--$o=$v" "kept"
+    else
+        row "$(src "$o")" "--$o=$v" "rewritten"
+        notice "the script asks for $(src "$o"); workshop jobs use --$o=$v"
+    fi
+}
+force account "$acct"
+force partition "$part"
+if [ -n "$res" ]; then
+    force reservation "$res"
+elif [ -n "$WS_RES_MAGNETIC" ]; then
+    # C22: the magnetic reservation takes jobs on the workshop accounts without --reservation.
+    if has reservation; then
+        row "$(src reservation)" "(no --reservation)" "dropped (magnetic $WS_RES_MAGNETIC)"
+    else
+        row "(none)" "(no --reservation)" "magnetic $WS_RES_MAGNETIC"
+    fi
+    notice "$(magnetic_note)"
+elif has reservation; then
+    row "$(src reservation)" "(no --reservation)" "dropped ($res_var is empty)"
+    notice "no workshop reservation is configured ($res_var is empty); submitting without --reservation (the script's $(src reservation) is dropped)"
+else
+    row "(none)" "(no --reservation)" "$res_var is empty"
+    notice "no workshop reservation is configured ($res_var is empty); submitting without --reservation"
+fi
+
+tmax=$(time_sec "$WS_TIME_MAX") || ws_die "$WS_E_ENV" "WS_TIME_MAX='$WS_TIME_MAX' is not a Slurm time; ask a helper"
+# The job's time: min(requested, WS_TIME_MAX, what is left of the reservation).
+rleft='' res_end=''
+if [ -n "$res" ] && rl=$(res_left "$res"); then rleft=${rl%% *} res_end=${rl#* }; fi
+want=$tmax
+tbad=0
+if has time && ! want=$(time_sec "$(val time)"); then tbad=1 want=$tmax; fi
+if [ "$tbad" -eq 1 ]; then
+    reject "$(src time): not a Slurm time. Fix: --time=00:10:00"
+elif [ -n "$rleft" ] && [ "$rleft" -lt "$RES_MIN_LEFT" ]; then
+    reject "the reservation $res ends at $res_end: less than $((RES_MIN_LEFT / 60)) minutes are left for a job. Fix: none inside the workshop; ask a helper"
+elif [ -n "$rleft" ] && [ "$rleft" -lt "$want" ] && [ "$rleft" -lt "$tmax" ]; then
+    eff+=("--time=$(hms "$rleft")")
+    row "$(src time)" "--time=$(hms "$rleft")" "clamped (the reservation ends at $res_end)"
+    notice "the reservation $res ends at $res_end; --time clamped to $(hms "$rleft") so the job ends inside it"
+elif ! has time; then
+    eff+=("--time=$WS_TIME_MAX")
+    row "(none)" "--time=$WS_TIME_MAX" "default (the cap)"
+elif [ "$want" -gt "$tmax" ]; then
+    eff+=("--time=$WS_TIME_MAX")
+    row "$(src time)" "--time=$WS_TIME_MAX" "clamped"
+    notice "--time $(val time) is over the ${WS_TIME_MAX} cap; clamped to --time=$WS_TIME_MAX"
+else
+    eff+=("--time=$(val time)")
+    row "$(src time)" "--time=$(val time)" "kept"
+fi
+
+for o in "${d_order[@]}"; do
+    case $o in
+        account|partition|reservation|time) continue ;;
+        test-only|parsable|wait|wrap)
+            row "$(src "$o")" "(dropped)" "ws-submit controls how sbatch runs"
+            notice "$(src "$o") in the script is ignored"
+            continue ;;
+    esac
+    if [ "${d_flag[$o]}" = 1 ]; then
+        case $o in -*) tok=$o ;; *) tok=--$o ;; esac
+    elif [ "$o" = array ] && [ "$cpu" -eq 0 ]; then
+        # Q32: a GPU array runs one task at a time (replace the script's %N, or append %1); the dry run
+        # shows the same line --yes submits.
+        tok="--array=${d_val[array]%\%*}%1"
+        if [ "$tok" != "--array=${d_val[array]}" ]; then
+            row "$(src "$o")" "$tok" "rewritten"
+            notice "array tasks run one at a time: 1 GPU per participant"
+            eff+=("$tok")
+            continue
+        fi
+    else
+        tok="--$o=${d_val[$o]}"
+    fi
+    eff+=("$tok")
+    row "$(src "$o")" "$tok" ""
+done
+
+default() { eff+=("--$1=$2"); row "(none)" "--$1=$2" "default"; }
+if ! has mem && ! has mem-per-cpu && ! has mem-per-gpu; then
+    if [ "$cpu" -eq 1 ]; then default mem 16g; else default mem 48g; fi
+fi
+if [ "$cpu" -eq 0 ] && ! has cpus-per-task; then default cpus-per-task 16; fi
+if ! has output; then default output slurm-%j.out; fi
+# A script under open/ is the M7 open-ended project, whatever the prepared topic is.
+if ! has comment; then
+    case $script_rel in open/*) default comment ws:open-ended ;; *) default comment "ws:${topic:-none}" ;; esac
+fi
+
+line=$(q sbatch "${eff[@]}" "$script")
+if [ "${#rejected[@]}" -gt 0 ]; then finish_rejected "$line"; fi
+case $script_rel in open/*) open_budget 1 ;; esac
+if [ "$submit" -eq 1 ] && [ "$cpu" -eq 0 ]; then gpu_live_check; fi
+scrub_notice
+if [ "$(dirname "$script_abs")" != "$here" ]; then
+    notice "the job runs in $here (sbatch's working directory is where you submit), not in the script's directory; relative paths in the script resolve from here"
+fi
+
+# --- sbatch --test-only (same options, scrubbed environment) ---
+rc=0
+tout=$(ws_run_scrubbed sbatch --test-only "${eff[@]}" "$script" 2>&1) || rc=$?
+estimate=$(printf '%s\n' "$tout" | grep -m 1 'to start at' || true)
+if [ -z "$estimate" ]; then estimate=$(printf '%s\n' "$tout" | grep -v '^[[:space:]]*$' | tail -n 1 || true); fi
+# sbatch --test-only says "sbatch: Job N to start at ..."; no job N exists, and an agent quoted it as
+# the job id (PN-s T13), so the number is stripped.
+if [[ $estimate =~ ^sbatch:\ Job\ [0-9]+\ to\ start\ at\ (.*)$ ]]; then
+    estimate="would start at ${BASH_REMATCH[1]} (test only, no job created)"
+fi
+
+# The table is for the dry run; with --yes the sbatch line and the notices are enough. C23 (Q47): the
+# label says what the line is: the sbatch command ws-submit runs, byte for byte (the dry run runs the
+# same options with --test-only).
+if [ "$json" -eq 0 ]; then
+    if [ "$submit" -eq 1 ]; then
+        say "ws-submit runs this sbatch command:"
+    else
+        say "ws-submit runs this sbatch command (dry run: nothing submitted yet):"
+    fi
+    printf '%s\n' "$line"
+    if [ "$submit" -eq 0 ]; then
+        say "directive -> effective:"
+        printf '  %-34s %-34s %s\n' "directive (script)" "effective" ""
+        for i in "${!row_dir[@]}"; do
+            printf '  %-34s %-34s %s\n' "${row_dir[$i]}" "-> ${row_eff[$i]}" "${row_note[$i]}"
+        done
+    fi
+    print_notices
+    say "sbatch --test-only: ${estimate:-(no output)}"
+fi
+if [ "$rc" -ne 0 ]; then
+    if [ "$json" -eq 1 ]; then emit_json "$line" "${estimate:-sbatch --test-only failed}" ""; fi
+    ws_die "$WS_E_SLURM" "sbatch --test-only rejected the job (exit $rc): ${estimate:-no output}; nothing was submitted"
+fi
+
+if [ "$submit" -eq 0 ]; then
+    if [ "$json" -eq 1 ]; then emit_json "$line" "$estimate" ""; else echo "$DRY_RUN_LINE"; fi
+    exit "$WS_E_OK"
+fi
+
+# --- submit (scrubbed environment; options on the command line, the file untouched) ---
+rc=0
+sout=$(ws_run_scrubbed sbatch "${eff[@]}" "$script" 2>&1) || rc=$?
+if [ "$rc" -ne 0 ]; then
+    if [ "$json" -eq 0 ]; then printf '%s\n' "$sout"; else printf '%s\n' "$sout" >&2; fi
+    ws_die "$WS_E_SLURM" "sbatch failed (exit $rc); nothing was recorded"
+fi
+jobid=$(printf '%s\n' "$sout" | grep -oE 'Submitted batch job [0-9]+' | tail -n 1 | grep -oE '[0-9]+$') || jobid=
+if [ -z "$jobid" ]; then
+    printf '%s\n' "$sout" >&2
+    ws_die "$WS_E_SLURM" "sbatch printed no 'Submitted batch job N' line; check squeue -u $USER"
+fi
+if [ "$cpu" -eq 1 ]; then kind=cpu; else kind=gpu; fi
+record_job "$jobid" "$script_rel" "$line" "$kind"
+if [ "$json" -eq 1 ]; then emit_json "$line" "$estimate" "$jobid"; else echo "Submitted batch job $jobid"; submitted_note "$jobid"; fi

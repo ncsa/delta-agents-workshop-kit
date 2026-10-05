@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# ws-roster (staff): tabulate the pre-flight reports in $WS_REPORTS, list who on the roster has
+# none yet, and show live occupancy of the workshop reservations.
+# Design: staging/agents-workshop/design/kit.md §4 ("Also") and ops.md §3 (tracking method).
+set -euo pipefail
+
+WS_BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source-path=SCRIPTDIR source=../lib/ws-common.sh
+. "$WS_BIN_DIR/../lib/ws-common.sh"
+
+usage() {
+    cat <<'EOF'
+usage: ws-roster [--json] [--roster <file.csv>] [--reports <dir>]
+
+Prints one row per pre-flight report in $WS_REPORTS (NetID, status, failing checks,
+warnings, pre-warm seconds, report time, host), then, with --roster, the NetIDs that
+have no report yet, then the live occupancy of $WS_RES_CPU, $WS_RES_GPU and
+$WS_RES_MAGNETIC (each one that is set).
+
+  --roster <csv>   registration list; the NetID column is the one headed netid, net_id,
+                   user, username or login, else the local part of an email column,
+                   else the first column
+  --reports <dir>  read reports from <dir> instead of $WS_REPORTS
+  --json           print everything as one JSON object
+EOF
+}
+
+json=0
+roster=
+reports=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --json) json=1 ;;
+        --roster) [ $# -ge 2 ] || { ws_err "--roster needs a file"; exit "$WS_E_USAGE"; }; roster=$2; shift ;;
+        --roster=*) roster=${1#*=} ;;
+        --reports) [ $# -ge 2 ] || { ws_err "--reports needs a directory"; exit "$WS_E_USAGE"; }; reports=$2; shift ;;
+        --reports=*) reports=${1#*=} ;;
+        -h|--help) usage; exit "$WS_E_OK" ;;
+        *) ws_err "unknown argument: $1"; usage >&2; exit "$WS_E_USAGE" ;;
+    esac
+    shift
+done
+
+ws_load_env
+reports=${reports:-$WS_REPORTS}
+[ -n "$reports" ] || ws_die "$WS_E_ENV" "WS_REPORTS is not set (workshop.env) and --reports was not given"
+[ -d "$reports" ] && [ -r "$reports" ] && [ -x "$reports" ] || ws_die "$WS_E_ENV" "reports directory not readable: $reports"
+if [ -n "$roster" ] && [ ! -r "$roster" ]; then ws_die "$WS_E_USAGE" "roster file not readable: $roster"; fi
+ws_require_cmd python3 || exit "$WS_E_ENV"
+
+# Live occupancy, one line per configured reservation: "<name>\t<state>\t<nodes>\t<running>\t<pending>\t<users>".
+occ=$(mktemp)
+trap 'rm -f "$occ"' EXIT
+for r in "$WS_RES_CPU" "$WS_RES_GPU" "$WS_RES_MAGNETIC"; do
+    [ -n "$r" ] || continue
+    if [ "$r" = "$WS_RES_MAGNETIC" ] && { [ "$r" = "$WS_RES_CPU" ] || [ "$r" = "$WS_RES_GPU" ]; }; then continue; fi
+    st=unknown nodes=
+    if out=$(timeout 30 scontrol show reservation "$r" 2>&1); then
+        st=$(tr ' ' '\n' <<<"$out" | sed -n 's/^State=//p' | head -n 1)
+        nodes=$(tr ' ' '\n' <<<"$out" | sed -n 's/^NodeCnt=//p' | head -n 1)
+    elif [[ $out == *"not found"* ]]; then
+        st="not created"
+    fi
+    if q=$(timeout 30 squeue -R "$r" -h -o '%T %u' 2>/dev/null); then
+        read -r running pending users < <(awk '$1 == "RUNNING" { r++ } $1 == "PENDING" { p++ } NF >= 2 { u[$2] = 1 }
+            END { n = 0; for (k in u) n++; print r + 0, p + 0, n }' <<<"$q")
+    else
+        running='?' pending='?' users='?'
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "${st:-unknown}" "${nodes:-?}" "$running" "$pending" "$users" >> "$occ"
+done
+
+WS_R_DIR=$reports WS_R_ROSTER=$roster WS_R_JSON=$json WS_R_OCC=$occ python3 - <<'PY'
+import csv, glob, json, os, sys
+
+d = os.environ["WS_R_DIR"]
+rows, bad = [], []
+for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+    try:
+        with open(f) as fh:
+            r = json.load(fh)
+        pw = r.get("prewarm") or {}
+        rows.append({
+            "netid": r.get("user") or os.path.basename(f)[:-5],
+            "status": r.get("status", "?"),
+            "fail": r.get("fail") or [],
+            "warn": r.get("warn") or [],
+            "prewarm_seconds": pw.get("seconds"),
+            "prewarm": pw.get("outcome"),
+            "time": r.get("finished") or r.get("started") or "",
+            "host": r.get("host") or "",
+            "byo": r.get("byo"),
+        })
+    except (OSError, ValueError) as e:
+        bad.append({"file": os.path.basename(f), "error": str(e).splitlines()[0][:80]})
+
+missing, roster_n = None, None
+if os.environ["WS_R_ROSTER"]:
+    with open(os.environ["WS_R_ROSTER"], newline="") as fh:
+        table = [r for r in csv.reader(fh) if any(c.strip() for c in r)]
+    col = 0
+    if table:
+        # A recognised header row names the column; without one every row is data.
+        head = [c.strip().lower().replace(" ", "_") for c in table[0]]
+        names = [h for h in ("netid", "net_id", "user", "username", "login", "email", "e-mail") if h in head]
+        if names:
+            col, table = head.index(names[0]), table[1:]
+    ids = []
+    for r in table:
+        v = r[col].strip() if col < len(r) else ""
+        if "@" in v:
+            v = v.split("@", 1)[0]
+        if v and v.lower() not in ids:
+            ids.append(v.lower())
+    have = {r["netid"].lower() for r in rows}
+    missing = [i for i in ids if i not in have]
+    roster_n = len(ids)
+    ros = set(ids)
+    for r in rows:
+        r["on_roster"] = r["netid"].lower() in ros
+
+occ = []
+with open(os.environ["WS_R_OCC"]) as fh:
+    for ln in fh:
+        n, st, nodes, run, pend, users = ln.rstrip("\n").split("\t")
+        occ.append({"reservation": n, "state": st, "nodes": nodes, "running": run, "pending": pend, "users": users})
+
+ok = sum(r["status"] == "OK" for r in rows)
+summary = {"reports": len(rows), "ok": ok, "fail": len(rows) - ok, "unreadable": len(bad)}
+if roster_n is not None:
+    summary.update({"roster": roster_n, "missing": len(missing)})
+
+if os.environ["WS_R_JSON"] == "1":
+    json.dump({"reports_dir": d, "summary": summary, "reports": rows, "unreadable": bad,
+               "missing": missing, "occupancy": occ}, sys.stdout, indent=2)
+    print()
+    sys.exit(0)
+
+cols = ("NETID", "STATUS", "FAILING", "WARN", "PREWARM_S", "REPORT_TIME", "HOST")
+table = [(r["netid"] + ("" if r.get("on_roster", True) else " (not on roster)"), r["status"],
+          ",".join(r["fail"]) or "-", ",".join(r["warn"]) or "-",
+          "-" if r["prewarm_seconds"] is None else str(r["prewarm_seconds"]),
+          r["time"][:16].replace("T", " ") or "-", r["host"].split(".")[0] or "-") for r in rows]
+w = [max([len(c)] + [len(t[i]) for t in table]) for i, c in enumerate(cols)]
+fmt = "  ".join("%%-%ds" % x for x in w)
+print(fmt % cols)
+for t in table:
+    print(fmt % t)
+for b in bad:
+    print("[ws] unreadable report: %(file)s (%(error)s)" % b)
+line = "[ws] %d reports: %d OK, %d FAIL" % (len(rows), ok, len(rows) - ok)
+if roster_n is not None:
+    line += "; roster %d, %d without a report" % (roster_n, len(missing))
+print(line)
+if missing:
+    print("[ws] no report yet: " + " ".join(missing))
+for o in occ:
+    print("[ws] %(reservation)s: %(state)s, %(nodes)s nodes; jobs %(running)s running, %(pending)s pending; %(users)s users" % o)
+PY

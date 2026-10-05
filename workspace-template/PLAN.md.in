@@ -1,0 +1,45 @@
+# Plan
+
+participant: @USER@ · date: @DATE@ · topic: <topic>
+
+Written with the agent in M2. The topic's code and checker are the workshop's; this plan is yours.
+
+## Goal
+
+<In your own words, one or two sentences: what you want to run and find out, and which number
+will show that it worked.>
+
+## Choices
+
+<One or two, from the "Choices" section of topics/<topic>/README.md. For each: what you
+chose, why, and its cost (time, GPU, risk).>
+
+1. <choice>: <what you chose>. Why: <your reason>. Cost: <time, GPU, risk>.
+
+## Milestones
+
+Each milestone names the command and the evidence line that proves it (from
+`topics/<topic>/check.sh` and the README's Acceptance).
+
+1. M3 environment: `ws-submit topics/<topic>/envcheck.sbatch`, then `--yes`.
+   Evidence: the log shows `[ws-env] host=<node> job=<id> gpu=<name|none>`.
+2. M4-M5 job: `ws-submit topics/<topic>/job.sbatch`, then `--yes` (llm-batch: `bash topics/llm-batch/run.sh`, then `--yes`).
+   Evidence: `sacct` shows COMPLETED in the reservation; the log has `<EVIDENCE>:` and `RESULTS_OK`
+   (llm-batch: results/results.json has its records instead).
+3. M6 results: `analyze.py` on that job's log, then RESULTS.md.
+   Evidence: `ws-check <topic>` reports level 3.
+
+## Rules for this project
+
+<Two to four rules the agent follows for this plan, each with its reason, for example:>
+
+- <Load `pytorch-conda/2.12` inside the job: the GPU is in the job, not where the agent runs.>
+- <Report `L2_ERROR` only from the job log: RESULTS.md must match what the job printed.>
+
+## Approval
+
+The agent fills in the line below, with your NetID and the time, only after you approve this plan
+in words ("I approve"; "ok" or "go on" is not an approval); `ws-submit --yes` refuses to submit a
+job until then.
+
+approved:

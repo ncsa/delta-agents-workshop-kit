@@ -1,0 +1,2004 @@
+{
+  "results": [
+    {
+      "input": {
+        "custom_id": "p01-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We sequence the gut microbiome of honeybees across seasons to see how diet shifts bacterial diversity."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:11.795187+00:00",
+        "request_latency_ms": 281.56,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "4a4b5a09-9194-4456-9d3c-0a6ba29e7775",
+        "object": "chat.completion",
+        "created": 1790589851,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"biology\",\"confidence\":0.9,\"why\":\"The description focuses on sequencing gut microbiomes in bees, which is a biological process related to ecology and genetics.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 118,
+          "total_tokens": 155,
+          "completion_tokens": 37,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p02-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We design a copper catalyst that turns carbon dioxide into methanol at room temperature."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:12.119201+00:00",
+        "request_latency_ms": 323.97,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "5a6d297b-c191-45e6-9fa0-ee7b800e6167",
+        "object": "chat.completion",
+        "created": 1790589852,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"chemistry\",\n  \"confidence\": 1,\n  \"why\": \"The reaction described involves chemical transformations (carbon dioxide to methanol), which is a core area in chemistry.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 157,
+          "completion_tokens": 43,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p03-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We cool rubidium atoms to nanokelvin temperatures to study quantum vortices in a condensate."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:12.465577+00:00",
+        "request_latency_ms": 346.35,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "c6c8f878-0a67-4829-a1a7-5d768e7965ce",
+        "object": "chat.completion",
+        "created": 1790589852,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"physics\",\"confidence\":0.9,\"why\":\"The description involves cooling atoms to extremely low temperatures using physical principles (cooling method), which is a fundamental aspect of both condensed matter physics and atomic physics.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 122,
+          "total_tokens": 168,
+          "completion_tokens": 46,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p04-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We develop a compiler pass that removes redundant memory copies in GPU programs."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:12.746853+00:00",
+        "request_latency_ms": 281.24,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "95e88f7e-196d-48c9-a798-c5bff4922386",
+        "object": "chat.completion",
+        "created": 1790589852,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"computer science\",\"confidence\":0.9,\"why\":\"The description involves programming and software development related to compilers and GPUs, which are key components of computer science.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 112,
+          "total_tokens": 149,
+          "completion_tokens": 37,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p05-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We date volcanic ash layers in lake sediments to reconstruct eruptions over ten thousand years."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:13.041754+00:00",
+        "request_latency_ms": 294.78,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "a51ddcc4-861e-4994-9477-bb4c652ddd10",
+        "object": "chat.completion",
+        "created": 1790589853,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"earth science\",\"confidence\":0.95,\"why\":\"The process of dating volcanic ash layers in lake sediments is an Earth Science technique used to study geological events.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 155,
+          "completion_tokens": 39,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p06-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This project maps which neurons in the zebrafish hindbrain fire when larvae escape a predator."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:13.388102+00:00",
+        "request_latency_ms": 346.32,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "7fbba17f-1d5b-45dd-a68c-52db2507e0db",
+        "object": "chat.completion",
+        "created": 1790589853,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"neuroscience\",\"confidence\":0.9,\"why\":\"The project focuses on studying neural activity in the zebrafish hindbrain during an escape response, which is a biological process related to neuroscience.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 118,
+          "total_tokens": 164,
+          "completion_tokens": 46,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p07-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This project synthesizes new metal-organic frameworks that trap water vapour from desert air."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:13.697856+00:00",
+        "request_latency_ms": 309.72,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "cbf707b0-6aa8-404e-84a2-8fa2b65925b3",
+        "object": "chat.completion",
+        "created": 1790589853,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"chemistry\",\n  \"confidence\": 1,\n  \"why\": \"The synthesis of new materials specifically involving metal-organic frameworks falls under chemical engineering or material science.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 157,
+          "completion_tokens": 41,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p08-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This project searches detector data for the faint recoil of a dark matter particle hitting xenon."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:13.934085+00:00",
+        "request_latency_ms": 236.19,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "78e12f13-2b58-4cc0-a9df-16e314f32401",
+        "object": "chat.completion",
+        "created": 1790589853,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"physics\",\"confidence\":1,\"why\":\"The project involves detecting dark matter particles using detectors, which is a fundamental area of physics.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 147,
+          "completion_tokens": 31,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p09-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This project trains a small language model to find bugs in student Python code."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:14.251224+00:00",
+        "request_latency_ms": 317.03,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "1aff1b59-4570-400c-9f94-65b66c0da952",
+        "object": "chat.completion",
+        "created": 1790589854,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"computer science\",\"confidence\":0.95,\"why\":\"The project involves training a machine learning model on programming tasks (Python bug detection), which is a core aspect of computer science.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 113,
+          "total_tokens": 155,
+          "completion_tokens": 42,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p10-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This project uses satellite radar to measure how fast Greenland glaciers flow into the sea."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:14.553448+00:00",
+        "request_latency_ms": 302.2,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "803841f3-d3af-449b-8556-b7269e5b0f20",
+        "object": "chat.completion",
+        "created": 1790589854,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"geophysics\",\n  \"confidence\": 1,\n  \"why\": \"It involves measuring glacier movement using satellites, which is related to geophysical processes.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 154,
+          "completion_tokens": 40,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p11-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We test whether a knocked-out gene slows the regeneration of planarian flatworms after amputation."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:14.789837+00:00",
+        "request_latency_ms": 236.36,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "9eecfafe-9e48-4838-a44e-81801734ccc7",
+        "object": "chat.completion",
+        "created": 1790589854,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"biology\",\"confidence\":0.9,\"why\":\"The study involves regenerative processes in planarians, which is a biological topic.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 118,
+          "total_tokens": 149,
+          "completion_tokens": 31,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p12-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We measure reaction rates of ozone with plant-emitted terpenes in a smog chamber."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:15.114110+00:00",
+        "request_latency_ms": 324.24,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "a8ba0f24-07fc-415e-9d90-c3f1b12b31f5",
+        "object": "chat.completion",
+        "created": 1790589855,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"chemistry\",\n  \"confidence\": 1,\n  \"why\": \"The study involves measuring reactions between chemicals (ozone and terpenes), which is a chemical process.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 117,
+          "total_tokens": 160,
+          "completion_tokens": 43,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p13-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We measure how sound waves travel through a granular material as it is compressed."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:15.576321+00:00",
+        "request_latency_ms": 455.6,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "083b4aec-4ab3-4037-8f8e-a38cd2a6fbaf",
+        "object": "chat.completion",
+        "created": 1790589855,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"physics\",\n  \"confidence\": 1,\n  \"why\": \"Sound waves are a type of mechanical wave that travels through materials, which in this case would be described as traveling through a 'granular material' (likely referring to sand or similar particles).\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 175,
+          "completion_tokens": 61,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p14-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We prove that a distributed consensus protocol stays safe when half the messages are lost."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:15.871689+00:00",
+        "request_latency_ms": 295.34,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "10fd2fd5-5084-4a71-96bb-9079145336e7",
+        "object": "chat.completion",
+        "created": 1790589855,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\": \"computer science\", \"confidence\": 0.95, \"why\": \"The description discusses a distributed system protocol, which is a key area in computer science.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 153,
+          "completion_tokens": 39,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p15-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We model how groundwater in the Midwest aquifer responds to decades of irrigation pumping."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:16.269717+00:00",
+        "request_latency_ms": 397.99,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "96160e0c-be4c-4b1c-9498-123f69d3b582",
+        "object": "chat.completion",
+        "created": 1790589856,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"agricultural engineering\",\n  \"confidence\": 0.95,\n  \"why\": \"The description focuses on modeling water flow in an agricultural context (irrigation), which is related to hydrology and engineering.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 167,
+          "completion_tokens": 53,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p16-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The study tracks how drought changes root growth and gene expression in wild sunflowers."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:16.554289+00:00",
+        "request_latency_ms": 284.55,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "cca37086-5e98-41c4-b9ce-9ad5d535b3f4",
+        "object": "chat.completion",
+        "created": 1790589856,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\": \"biology\", \"confidence\": 1, \"why\": \"The study focuses on plant growth under environmental stress conditions, which is directly related to biological processes.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 151,
+          "completion_tokens": 37,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p17-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The study develops a cheaper electrolyte that stops lithium dendrites from growing in batteries."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:16.878034+00:00",
+        "request_latency_ms": 323.61,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "70387535-c05f-4b0e-8fae-2cf3d19b2700",
+        "object": "chat.completion",
+        "created": 1790589856,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"chemistry\",\n  \"confidence\": 1,\n  \"why\": \"The study is focused on developing an electrolyte for batteries, which falls under chemical engineering and materials science.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 115,
+          "total_tokens": 158,
+          "completion_tokens": 43,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p18-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The study simulates turbulence in the plasma at the edge of a tokamak fusion reactor."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:17.173078+00:00",
+        "request_latency_ms": 295.01,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "693e546c-f674-4ef2-af90-1dc1b323d841",
+        "object": "chat.completion",
+        "created": 1790589857,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"physics\",\n  \"confidence\": 1,\n  \"why\": \"Turbulence is a fundamental concept in fluid dynamics, which is studied under physics.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 117,
+          "total_tokens": 156,
+          "completion_tokens": 39,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p19-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The study designs a scheduler that packs batch jobs onto a cluster to reduce idle cores."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:17.482795+00:00",
+        "request_latency_ms": 309.69,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "a4c3b117-e904-4524-a976-74dd32725de5",
+        "object": "chat.completion",
+        "created": 1790589857,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\": \"computer science\", \"confidence\": 1, \"why\": \"The study is focused on designing a scheduling algorithm for computational tasks, which falls under the domain of computer science.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 115,
+          "total_tokens": 156,
+          "completion_tokens": 41,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p20-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The study records small earthquakes along a fault to see how stress builds before large ruptures."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:17.792671+00:00",
+        "request_latency_ms": 309.85,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "f2c312d2-7441-4156-aeea-3f797ed004c5",
+        "object": "chat.completion",
+        "created": 1790589857,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"seismology\",\n  \"confidence\": 1,\n  \"why\": \"The focus of the study is on earthquake activity, which falls under seismology.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 157,
+          "completion_tokens": 41,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p21-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We measure how quickly antibiotic resistance spreads between E. coli strains in a shared culture."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:18.072935+00:00",
+        "request_latency_ms": 280.13,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "5b83d673-b16d-4ed1-b913-5b017360558e",
+        "object": "chat.completion",
+        "created": 1790589858,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"biology\",\n  \"confidence\": 1,\n  \"why\": \"The study involves measuring bacterial growth and genetic changes, which are biological processes.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 115,
+          "total_tokens": 152,
+          "completion_tokens": 37,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p22-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We use mass spectrometry to identify unknown pesticide breakdown products in river water."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:18.294217+00:00",
+        "request_latency_ms": 221.25,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "e77c99de-7dbc-4b41-ab7a-dec25aeaca9e",
+        "object": "chat.completion",
+        "created": 1790589858,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"chemistry\",\"confidence\":0.9,\"why\":\"The process involves analyzing chemical compounds, which is primarily associated with chemistry.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 143,
+          "completion_tokens": 29,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p23-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We build a superconducting circuit whose qubits keep their state for longer than a millisecond."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:18.662883+00:00",
+        "request_latency_ms": 368.64,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "c70bcceb-0e82-4648-ad89-8126ea7a6382",
+        "object": "chat.completion",
+        "created": 1790589858,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"physics\",\n  \"confidence\": 0.95,\n  \"why\": \"The description involves quantum computing using superconducting circuits, which is a fundamental area in condensed matter physics and quantum mechanics.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 118,
+          "total_tokens": 167,
+          "completion_tokens": 49,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p24-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We compress sparse matrices with a new format that speeds up graph algorithms."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:18.980673+00:00",
+        "request_latency_ms": 317.76,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "3660e44d-77ab-4742-a07c-a4378a370d4a",
+        "object": "chat.completion",
+        "created": 1790589858,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\": \"computer science\", \"confidence\": 1, \"why\": \"The description mentions compressing sparse matrices, which is a technique used in computer science for efficient data storage and manipulation.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 112,
+          "total_tokens": 154,
+          "completion_tokens": 42,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p25-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We measure how much carbon permafrost soils release as the Arctic summers lengthen."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:19.349120+00:00",
+        "request_latency_ms": 368.3,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "f2487d10-e9e4-4cff-a939-825cada6d50d",
+        "object": "chat.completion",
+        "created": 1790589859,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"earth science\",\n  \"confidence\": 1,\n  \"why\": \"The research involves measuring emissions from thawing permafrost, which is an Earth science topic related to climate change and environmental science.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 115,
+          "total_tokens": 164,
+          "completion_tokens": 49,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p26-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This work compares immune cell responses in bats and mice infected with the same virus."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:19.681020+00:00",
+        "request_latency_ms": 331.87,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "979758e7-1c86-44c4-91f4-4899f3482ad2",
+        "object": "chat.completion",
+        "created": 1790589859,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"biology\",\"confidence\":0.9,\"why\":\"The description focuses on comparing immune cell responses in different species (bats and mice) infected by the same virus, which is a biological topic.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 158,
+          "completion_tokens": 44,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p27-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This work computes how solvent molecules change the colour of a fluorescent dye."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:19.991176+00:00",
+        "request_latency_ms": 310.13,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "07035c86-5d4a-456c-ac37-bc24ccb91ec9",
+        "object": "chat.completion",
+        "created": 1790589859,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"chemistry\",\n  \"confidence\": 1,\n  \"why\": \"The study involves molecular interactions (solvent-dye interaction) which is central to chemical processes.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 112,
+          "total_tokens": 153,
+          "completion_tokens": 41,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p28-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This work uses gravitational-wave signals to measure how fast the universe is expanding."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:20.249697+00:00",
+        "request_latency_ms": 258.49,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "fa4a98ff-588d-42e8-9e1e-a7df1404722e",
+        "object": "chat.completion",
+        "created": 1790589860,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"cosmology\",\"confidence\":0.9,\"why\":\"The study involves measuring the expansion rate of the universe, which falls under cosmology.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 113,
+          "total_tokens": 147,
+          "completion_tokens": 34,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p29-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This work measures how often web browsers leak private data through third-party scripts."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:20.603273+00:00",
+        "request_latency_ms": 353.46,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "8eb03531-524d-42a2-837f-bf2912d583e7",
+        "object": "chat.completion",
+        "created": 1790589860,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"computer science\",\n  \"confidence\": 1,\n  \"why\": \"The focus on measuring leakage of data through third-party scripts is typical of cybersecurity or privacy engineering which falls under Computer Science.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 113,
+          "total_tokens": 160,
+          "completion_tokens": 47,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p30-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: This work reconstructs past ocean temperatures from oxygen isotopes in foraminifera shells."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:20.942383+00:00",
+        "request_latency_ms": 339.08,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "e7691b81-dabb-4084-8d50-bd1456ba9760",
+        "object": "chat.completion",
+        "created": 1790589860,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\": \"geochemistry\", \"confidence\": 1, \"why\": \"The study involves the reconstruction of ocean temperatures using isotope data from foraminifera shells, which falls under geochemical analysis.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 161,
+          "completion_tokens": 45,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p31-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We model how coral polyps and their symbiotic algae exchange nutrients under warming seawater."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:21.303259+00:00",
+        "request_latency_ms": 360.84,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "2be3dd79-028d-4890-ae59-78c6855c2766",
+        "object": "chat.completion",
+        "created": 1790589861,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"biology\",\n  \"confidence\": 1,\n  \"why\": \"The description focuses on marine organisms (coral polyps) and their biological interactions, which is clearly within the domain of biology.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 164,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p32-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We build polymers that break down in seawater within months instead of centuries."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:21.664037+00:00",
+        "request_latency_ms": 360.75,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "f0ae4ec1-b624-4dc0-95a9-9bb7878fe80c",
+        "object": "chat.completion",
+        "created": 1790589861,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"chemistry\",\"confidence\":0.95,\"why\":\"The description involves creating materials (polymers) that degrade under specific conditions (seawater), which is a common topic in chemical engineering or polymer science.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 114,
+          "total_tokens": 162,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p33-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We shine terahertz pulses on graphene to watch its electrons heat up and cool down."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:22.039865+00:00",
+        "request_latency_ms": 375.7,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "4425d083-a9bc-4c6c-8d47-3b619c135c6b",
+        "object": "chat.completion",
+        "created": 1790589862,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"physics\",\"confidence\":0.9,\"why\":\"The process described involves interacting electromagnetic radiation (terahertz pulses) with a material (graphene), leading to thermal effects such as heating and cooling of electrons within the material.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 166,
+          "completion_tokens": 50,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p34-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We build a verified file system whose crash recovery is checked by a theorem prover."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:22.305899+00:00",
+        "request_latency_ms": 266.0,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "41a25563-1e58-4b67-915f-df92304b430b",
+        "object": "chat.completion",
+        "created": 1790589862,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"computer science\",\"confidence\":1,\"why\":\"The description mentions building a file system and verifying its crash recovery, which are key components in computer science.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 115,
+          "total_tokens": 150,
+          "completion_tokens": 35,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p35-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: We track dust storms from the Sahara across the Atlantic with weather-model simulations."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:22.534892+00:00",
+        "request_latency_ms": 228.96,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "ee5dbf8e-8025-4a4d-90db-d91316f426c0",
+        "object": "chat.completion",
+        "created": 1790589862,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"weather\",\"confidence\":1,\"why\":\"The description focuses on tracking atmospheric phenomena (dust storms) using weather-model simulations.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 113,
+          "total_tokens": 143,
+          "completion_tokens": 30,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p36-biology",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The lab images mitochondria dividing inside living yeast cells to find the proteins that control fission."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:22.800649+00:00",
+        "request_latency_ms": 265.73,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "06cf04a9-9cd4-4076-a15d-5e4df4d7dfdb",
+        "object": "chat.completion",
+        "created": 1790589862,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"biology\",\n  \"confidence\": 1,\n  \"why\": \"The description focuses on cellular processes involving mitochondria in living organisms.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 117,
+          "total_tokens": 152,
+          "completion_tokens": 35,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p37-chemistry",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The lab tunes the size of gold nanoparticles to control how they catalyse glucose oxidation."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:23.132226+00:00",
+        "request_latency_ms": 331.42,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "82084086-1fd4-4ddc-9fed-8d48c7f9fffc",
+        "object": "chat.completion",
+        "created": 1790589863,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"chemistry\",\n  \"confidence\": 1,\n  \"why\": \"The study involves manipulating the size of gold nanoparticles, which is a key aspect in chemical synthesis and materials science.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 116,
+          "total_tokens": 160,
+          "completion_tokens": 44,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p38-physics",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The lab measures the friction of ice sliding on ice at temperatures near melting."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:23.479016+00:00",
+        "request_latency_ms": 346.76,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "584e0121-844d-43db-9fc1-3e44e8cc326a",
+        "object": "chat.completion",
+        "created": 1790589863,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"physics\",\n  \"confidence\": 1,\n  \"why\": \"The measurement of friction is fundamental in understanding physical properties such as temperature effects, which falls under the broader category of physics.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 113,
+          "total_tokens": 159,
+          "completion_tokens": 46,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p39-computer-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The lab benchmarks vector databases on searching one billion image embeddings."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:23.803909+00:00",
+        "request_latency_ms": 324.87,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "06ed7e7d-3602-4fe7-8eb6-0c22c4c73a6a",
+        "object": "chat.completion",
+        "created": 1790589863,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"field\": \"computer science\",\n  \"confidence\": 1,\n  \"why\": \"The focus on benchmarking vector databases for searching large datasets (image embeddings) falls under computer science.\"\n}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 110,
+          "total_tokens": 153,
+          "completion_tokens": 43,
+          "prompt_tokens_details": null
+        }
+      }
+    },
+    {
+      "input": {
+        "custom_id": "p40-earth-science",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a careful research librarian. You answer with one JSON object and nothing else."
+            },
+            {
+              "role": "user",
+              "content": "Classify the research description below into exactly one of these fields: biology, chemistry, physics, computer science, earth science. Reply with only a JSON object of the form {\"field\": \"<one of the fields>\", \"confidence\": <a number from 0 to 1>, \"why\": \"<one short sentence>\"}.\n\nDescription: The lab maps soil erosion on farmland after heavy rain using drone photogrammetry."
+            }
+          ]
+        }
+      },
+      "metadata": {
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "timestamp": "2026-09-28T10:04:24.062368+00:00",
+        "request_latency_ms": 258.43,
+        "retry_count": 0,
+        "method": "POST",
+        "url": "/v1/chat/completions"
+      },
+      "output": {
+        "id": "7ae3458e-77e6-48c3-8397-a45434cc7d33",
+        "object": "chat.completion",
+        "created": 1790589864,
+        "model": "$WS_KIT_RO/models/Qwen2.5-1.5B-Instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"field\":\"earth science\",\"confidence\":0.9,\"why\":\"The description involves mapping soil erosion, which is an Earth Science topic related to environmental studies.\"}"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 115,
+          "total_tokens": 149,
+          "completion_tokens": 34,
+          "prompt_tokens_details": null
+        }
+      }
+    }
+  ],
+  "vllm_metrics": {
+    "vllm_request_throughput_req_per_sec": 3.184,
+    "vllm_token_throughput_tok_per_sec": 132.1,
+    "vllm_ttft_p50_ms": 15.0,
+    "vllm_ttft_p95_ms": 19.5,
+    "vllm_itl_p50_ms": 5.0,
+    "vllm_itl_p95_ms": 9.5,
+    "vllm_kv_cache_usage_avg_pct": 0.0111,
+    "vllm_kv_cache_peak_pct": 0.0132,
+    "vllm_effective_batch_size_avg": 1.0,
+    "vllm_scrape_count": 12
+  },
+  "gpu_metrics": {
+    "gpu_util_avg_pct": 99.7,
+    "gpu_util_peak_pct": 100.0,
+    "gpu_util_p50_pct": 100.0,
+    "gpu_util_p95_pct": 100.0,
+    "gpu_util_stddev_pct": 0.47
+  },
+  "run_metrics": {
+    "elapsed_sec": 12.579,
+    "successful_req_per_sec": 3.18,
+    "request_latency_p50_ms": 313.58,
+    "request_latency_p95_ms": 376.81,
+    "request_latency_p99_ms": 433.13,
+    "retry_count_total": 0,
+    "retry_rate_pct": 0.0,
+    "avg_retries_per_request": 0.0,
+    "retry_success_rate_pct": null,
+    "error_rate_by_type_pct": {
+      "timeout": 0.0,
+      "rate_limit": 0.0,
+      "server": 0.0,
+      "validation": 0.0,
+      "other": 0.0
+    },
+    "output_tokens_avg": 41.5,
+    "output_tokens_p95": 50.15,
+    "successful_tok_per_sec": 132.0
+  }
+}
